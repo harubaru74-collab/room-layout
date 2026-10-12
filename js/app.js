@@ -77,13 +77,13 @@ const app = {
   underlayImg: null,
   furniture() { return app.state.plans[app.state.current].furniture; },
   selected() { return app.furniture().find(f => f.id === app.selId) || null; },
-  select(id) {
-    if (app.selId === id) return;
-    app.selId = id;
-    $('#quickTools').hidden = !id;
-    app.plan2d.render();
-    if (app.tab === 'item') renderSheet();
-  },
+  // 作り付け・窓ドアも、図をタップして選べる
+  selFx: null, selOp: null,
+  selectedFx() { return app.state.room.fixtures.find(f => f.id === app.selFx) || null; },
+  selectedOp() { return app.state.room.openings.find(o => o.id === app.selOp) || null; },
+  select(id) { setSel(id, null, null); },
+  selectFx(id) { setSel(null, id, null); },
+  selectOp(id) { setSel(null, null, id); },
   // light: ドラッグ中など。パネルは作り直さない
   changed({ light = false, keepPanel = false } = {}) {
     save({ record: !light });
@@ -106,7 +106,10 @@ window.app = app; // 動作確認用
 function replaceState(st, { fit = true } = {}) {
   app.state = st;
   curRoom().state = st;
-  if (!app.selected()) { app.selId = null; $('#quickTools').hidden = true; }
+  if (!app.selected()) app.selId = null;
+  if (!app.selectedFx()) app.selFx = null;
+  if (!app.selectedOp()) app.selOp = null;
+  refreshQuick();
   renderPlanSeg(); renderRoomBar(); updateNightBtn(); loadUnderlay(); app.changed();
   if (fit) app.plan2d.fit();
 }
@@ -189,7 +192,7 @@ $('#planSeg').addEventListener('click', e => {
 function switchPlan(k) {
   if (k === app.state.current || !app.state.plans[k]) return;
   app.state.current = k;
-  app.selId = null; $('#quickTools').hidden = true;
+  setSel(null, null, null, { quiet: true });
   renderPlanSeg();
   app.changed();
   toast(`${app.state.plans[app.state.current].name}に切り替えたよ`);
@@ -204,7 +207,7 @@ function switchRoom(id, { quiet = false } = {}) {
   store.current = id;
   if (app.plan2d.tool) { app.plan2d.setTool(null); $('#toolbar').hidden = true; }
   app.state = curRoom().state;
-  app.selId = null; $('#quickTools').hidden = true;
+  setSel(null, null, null, { quiet: true });
   renderPlanSeg(); renderRoomBar(); updateNightBtn(); loadUnderlay();
   app.changed();
   resetHistory();
@@ -279,7 +282,7 @@ function toast(msg, ms = 2800) {
 function rotate90(f) { f.rot = (Math.round(f.rot / 90) * 90 + 90) % 360; app.changed(); }
 function duplicate(f) {
   const c = { ...clone(f), id: 'f' + Math.random().toString(36).slice(2, 9), x: f.x + 20, y: f.y + 20 };
-  app.furniture().push(c); app.selId = c.id; app.changed(); toast('複製したよ');
+  app.furniture().push(c); setSel(c.id, null, null, { quiet: true }); app.changed(); toast('複製したよ');
 }
 function remove(f) {
   ask(`「${f.name}」を削除する？`, () => {
@@ -292,19 +295,96 @@ function addFurniture(tplObj, { quiet = false } = {}) {
   const { room } = app.state;
   const f = makeFurniture(tplObj, Math.round(room.w / 2 / 5) * 5, Math.round(room.d * 0.55 / 5) * 5);
   app.furniture().push(f);
-  app.selId = f.id; $('#quickTools').hidden = false;
+  setSel(f.id, null, null, { quiet: true });
   if (app.mode !== '2d') setMode('2d');
   app.changed();
   openTab('item');
   if (!quiet) toast(`「${f.name}」を部屋の真ん中に置いたよ。ドラッグで動かしてね`);
   return f;
 }
+// 選ぶものを切り替える(家具 / 作り付け / 窓・ドア のどれか1つ)
+function setSel(fid, fxid, opid, { quiet = false } = {}) {
+  if (app.selId === fid && app.selFx === fxid && app.selOp === opid) return;
+  app.selId = fid; app.selFx = fxid; app.selOp = opid;
+  refreshQuick();
+  if (quiet) return;
+  app.plan2d.render();
+  app.view3d?.markSel?.();
+  if (app.tab === 'item') renderSheet();
+}
+// 図の下に出る小さな操作ボタン(選んだものに合わせて中身を変える)
+function refreshQuick() {
+  const q = $('#quickTools');
+  const f = app.selected(), fx = app.selectedFx(), op = app.selectedOp();
+  q.hidden = !(f || fx || op);
+  if (f) q.innerHTML = '<button data-act="rot90" title="90度回転 (R)">⟳ 90°</button><button data-act="dup">複製</button><button data-act="edit">✎ 詳しく</button><button data-act="del" class="danger">削除</button>';
+  else if (fx) q.innerHTML = `<select data-act="fxKind" aria-label="種類">${KINDS.map(([v, n]) => `<option value="${v}" ${v === fx.kind ? 'selected' : ''}>${n}</option>`).join('')}</select>`
+    + '<button data-act="rot90" title="90度回転 (R)">⟳ 90°</button><button data-act="dup">複製</button><button data-act="edit">✎</button><button data-act="del" class="danger">削除</button>';
+  else if (op) q.innerHTML = `<button data-act="opKind">${op.kind === 'door' ? '🚪 ドア → 窓にする' : '🪟 窓 → ドアにする'}</button><button data-act="edit">✎ 詳しく</button><button data-act="del" class="danger">削除</button>`;
+  else q.innerHTML = '';
+}
 $('#quickTools').addEventListener('click', e => {
-  const b = e.target.closest('button'); const f = app.selected(); if (!b || !f) return;
-  if (b.dataset.act === 'rot90') rotate90(f);
-  if (b.dataset.act === 'dup') duplicate(f);
-  if (b.dataset.act === 'del') remove(f);
+  const b = e.target.closest('button'); if (!b) return;
+  const f = app.selected(), fx = app.selectedFx(), op = app.selectedOp();
+  const act = b.dataset.act;
+  if (act === 'edit') { openTab('item'); return; }
+  if (f) {
+    if (act === 'rot90') rotate90(f);
+    if (act === 'dup') duplicate(f);
+    if (act === 'del') remove(f);
+  } else if (fx) {
+    if (act === 'rot90') rotateFx(fx);
+    if (act === 'dup') duplicateFx(fx);
+    if (act === 'del') removeFx(fx);
+  } else if (op) {
+    if (act === 'opKind') { toggleOpKind(op); }
+    if (act === 'del') removeOp(op);
+  }
 });
+$('#quickTools').addEventListener('change', e => {
+  const fx = app.selectedFx();
+  if (fx && e.target.dataset.act === 'fxKind') setFxKind(fx, e.target.value);
+});
+
+// ---------- 作り付け・窓ドアの操作 ----------
+function setFxKind(fx, kind) {
+  const names = KINDS.map(k => k[1]).concat(Object.values(FX_KIND_DEFAULT).map(v => v[0]), ['収納', 'クローゼット']);
+  const [name, hgt] = FX_KIND_DEFAULT[kind];
+  // 名前を自分で変えていなければ、種類に合わせた名前・高さにする
+  if (names.includes(fx.name) || /^収納|^作り付け/.test(fx.name)) fx.name = name;
+  if (kind === 'entrance' || kind === 'washer') fx.h = hgt; else if (!fx.h || fx.kind === 'entrance' || fx.kind === 'washer') fx.h = hgt;
+  fx.kind = kind;
+  app.changed(); refreshQuick();
+  toast(`「${KINDS.find(k => k[0] === kind)[1]}」にしたよ`, 1500);
+}
+function rotateFx(fx) {
+  // 真ん中を中心に90度回す(幅と奥行が入れかわる)
+  const cx = fx.x + fx.w / 2, cy = fx.y + fx.d / 2;
+  [fx.w, fx.d] = [fx.d, fx.w];
+  fx.x = Math.round(cx - fx.w / 2); fx.y = Math.round(cy - fx.d / 2);
+  app.changed();
+}
+function duplicateFx(fx) {
+  const c = { ...clone(fx), id: newId('fx'), x: fx.x + 20, y: fx.y + 20 };
+  app.state.room.fixtures.push(c); setSel(null, c.id, null, { quiet: true }); app.changed(); toast('複製したよ');
+}
+function removeFx(fx) {
+  const list = app.state.room.fixtures;
+  list.splice(list.indexOf(fx), 1);
+  setSel(null, null, null, { quiet: true }); app.changed(); toast(`「${fx.name}」を削除したよ(↶で戻せるよ)`);
+}
+function toggleOpKind(op) {
+  const door = op.kind !== 'door';
+  op.kind = door ? 'door' : 'window';
+  if (/^(窓|ドア)$/.test(op.name)) op.name = door ? 'ドア' : '窓';
+  if (door) { op.sill = 0; op.height = 200; } else if (op.wall !== 'balcony') { op.sill = 90; op.height = 110; }
+  app.changed(); refreshQuick();
+}
+function removeOp(op) {
+  const list = app.state.room.openings;
+  list.splice(list.indexOf(op), 1);
+  setSel(null, null, null, { quiet: true }); app.changed(); toast(`「${op.name}」を削除したよ(↶で戻せるよ)`);
+}
 $('#fitBtn').addEventListener('click', () => app.plan2d.fit());
 document.querySelectorAll('[data-shot]').forEach(b => b.addEventListener('click', () => savePng(true)));
 
@@ -330,7 +410,7 @@ async function readUrlInto(url, f) {
     if (p.photo) target.photo = p.photo;
     target.url = url.trim();
     if (target.type === 'sofa' || target.type === 'sofa1') target.seat = target.seat || 40;
-    app.selId = target.id;
+    setSel(target.id, null, null, { quiet: true });
     app.changed();
     if (p.size) toast(got.length ? `読み取れたよ✨ ${got.join('・')}。違うところは手で直してね` : '読み取れる情報が見つからなかったよ', 5000);
     else toast('サイズが見つからなかったよ。商品ページのサイズ表記をコピーして「サイズ表記から読み取る」に貼ってみてね', 6000);
@@ -402,14 +482,19 @@ window.addEventListener('keydown', e => {
   if (k === 'p' && !mod) { savePng(true); return; }
   if (k === 'l' && !mod) { cycleLight(); return; }
   if (app.mode !== '2d') return;
-  const f = app.selected();
+  const f = app.selected(), fx = app.selectedFx(), op = app.selectedOp();
   if (k === 'escape') { if (app.plan2d.tool) endTool(); else app.select(null); return; }
-  if (!f || mod) return;
+  if (!(f || fx || op) || mod) return;
   const stepCm = e.shiftKey ? 1 : 5;
   const mv = { arrowleft: [-stepCm, 0], arrowright: [stepCm, 0], arrowup: [0, -stepCm], arrowdown: [0, stepCm] }[k];
-  if (mv) { e.preventDefault(); f.x += mv[0]; f.y += mv[1]; app.changed(); return; }
-  if (k === 'delete' || k === 'backspace') { e.preventDefault(); remove(f); return; }
-  if (k === 'r') { rotate90(f); }
+  if (mv) {
+    e.preventDefault();
+    if (op) op.start += (op.wall === 'left' || op.wall === 'right') ? mv[1] : mv[0];
+    else { const t = f || fx; t.x += mv[0]; t.y += mv[1]; }
+    app.changed(); return;
+  }
+  if (k === 'delete' || k === 'backspace') { e.preventDefault(); if (f) remove(f); else if (fx) removeFx(fx); else removeOp(op); return; }
+  if (k === 'r') { if (f) rotate90(f); else if (fx) rotateFx(fx); }
 });
 
 // パネルの開け閉めで表示エリアの大きさが変わったとき
@@ -420,7 +505,7 @@ function relayout() {
 }
 
 // ---------- 下のパネル ----------
-const TAB_TITLES = { item: '選んだ家具', add: '家具を追加', room: 'お部屋・間取り', more: '見た目・保存' };
+const TAB_TITLES = { item: '選んだもの', add: '家具を追加', room: 'お部屋・間取り', more: '見た目・保存' };
 function openTab(tab) {
   app.tab = tab;
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
@@ -457,10 +542,13 @@ const SHAPES = [['box', '箱(棚・収納など)'], ['lowtable', 'テーブル(�
 const PHOTO_TYPES = ['rug', 'roundrug', 'art'];
 
 function itemPanel() {
+  const fx = app.selectedFx(), op = app.selectedOp();
+  if (fx) return fxCard(fx, app.state.room.fixtures.indexOf(fx), true);
+  if (op) return opCard(op, app.state.room.openings.indexOf(op), true);
   const f = app.selected();
   if (!f) {
     const list = app.furniture();
-    return `<p class="muted">上から見た図(または3D)で家具をタップすると、ここでサイズや色を変えられるよ。</p>
+    return `<p class="muted">上から見た図で家具・作り付け・窓をタップすると、ここで細かく変えられるよ。図の上でも、ドラッグで動かす・角の□で大きさを変える・ピンクの⟳で回転ができるよ。</p>
       <div class="row">${list.map(i => `<button class="opt" data-select="${i.id}">${esc(i.name)}</button>`).join('') || '<span class="muted">まだ家具がないよ。「＋家具を追加」から置いてね</span>'}</div>`;
   }
   return `
@@ -513,6 +601,27 @@ function addPanel() {
 
 const KINDS = [['closet', '収納・クローゼット'], ['kitchen', 'キッチン'], ['ub', 'お風呂・トイレ'], ['washer', '洗濯機置き場'], ['storage', '下駄箱・棚'], ['entrance', '玄関(土間)'], ['wall', '柱・壁の出っぱり']];
 const WALLS = [['entrance', '玄関側の壁'], ['balcony', 'ベランダ側の壁'], ['left', '左の壁(x=0)'], ['right', '右の壁']];
+// 作り付け・窓ドアの編集カード(「部屋の設定」と「選んだもの」の両方で使う)
+function fxCard(fx, i, single = false) {
+  return `
+      <div class="card ${fx.id === app.selFx ? 'sel' : ''}" data-fx="${i}">
+        <div class="card-title"><span>${esc(fx.name)}</span>${single ? '' : `<button data-act="pickFx" data-i="${i}">図で選ぶ</button>`}<button data-act="delFx" data-i="${i}">削除</button></div>
+        <div class="field two">${txt('名前', 'fx-name', fx.name)}<label class="in">種類<select data-k="fx-kind">${KINDS.map(([v, n]) => `<option value="${v}" ${v === fx.kind ? 'selected' : ''}>${n}</option>`).join('')}</select></label></div>
+        <div class="field">${num('x', 'fx-x', fx.x, { step: 5 })}${num('y', 'fx-y', fx.y, { step: 5 })}${num('高さ', 'fx-h', fx.h, { min: 0 })}</div>
+        <div class="field two">${num('幅', 'fx-w', fx.w, { min: 1 })}${num('奥行', 'fx-d', fx.d, { min: 1 })}</div>
+        ${single ? '<div class="row"><button class="btn" data-act="rotFx">⟳ 90°回転</button><button class="btn" data-act="dupFx">複製</button></div><p class="muted">💡 図の上でドラッグすると動かせて、角の□で大きさを変えられるよ。</p>' : ''}
+      </div>`;
+}
+function opCard(o, i, single = false) {
+  return `
+      <div class="card ${o.id === app.selOp ? 'sel' : ''}" data-op="${i}">
+        <div class="card-title"><span>${esc(o.name)}</span>${single ? '' : `<button data-act="pickOp" data-i="${i}">図で選ぶ</button>`}<button data-act="delOp" data-i="${i}">削除</button></div>
+        <div class="field two">${txt('名前', 'op-name', o.name)}<label class="in">種類<select data-k="op-kind"><option value="window" ${o.kind === 'window' ? 'selected' : ''}>窓</option><option value="door" ${o.kind === 'door' ? 'selected' : ''}>ドア</option></select></label></div>
+        <div class="field two"><label class="in">どの壁<select data-k="op-wall">${WALLS.map(([v, n]) => `<option value="${v}" ${v === o.wall ? 'selected' : ''}>${n}</option>`).join('')}</select></label>${num('端からの距離', 'op-start', o.start, { step: 5 })}</div>
+        <div class="field">${num('幅', 'op-width', o.width, { min: 10 })}${num('床からの高さ', 'op-sill', o.sill, { min: 0 })}${num('窓の高さ', 'op-height', o.height, { min: 10 })}</div>
+        ${single ? '<p class="muted">💡 図の上でドラッグすると壁に沿って動かせて(ほかの壁にも移せるよ)、両はしの□で幅を変えられるよ。</p>' : ''}
+      </div>`;
+}
 function roomPanel() {
   const r = app.state.room;
   const u = app.state.underlay;
@@ -546,22 +655,11 @@ function roomPanel() {
     <div class="field">${num('部屋の幅 cm', 'r-w', r.w, { min: 100 })}${num('奥行 cm', 'r-d', r.d, { min: 100 })}${num('天井高 cm', 'r-h', r.h, { min: 180 })}</div>
     <div class="field two">${num('ベランダの奥行 cm', 'r-balcony', r.balcony, { min: 0 })}</div>
     <h4>作り付け(動かせないもの) — x,y は左上の角</h4>
-    ${r.fixtures.map((fx, i) => `
-      <div class="card" data-fx="${i}">
-        <div class="card-title"><span>${esc(fx.name)}</span><button data-act="delFx" data-i="${i}">削除</button></div>
-        <div class="field two">${txt('名前', 'fx-name', fx.name)}<label class="in">種類<select data-k="fx-kind">${KINDS.map(([v, n]) => `<option value="${v}" ${v === fx.kind ? 'selected' : ''}>${n}</option>`).join('')}</select></label></div>
-        <div class="field">${num('x', 'fx-x', fx.x, { step: 5 })}${num('y', 'fx-y', fx.y, { step: 5 })}${num('高さ', 'fx-h', fx.h, { min: 0 })}</div>
-        <div class="field two">${num('幅', 'fx-w', fx.w, { min: 1 })}${num('奥行', 'fx-d', fx.d, { min: 1 })}</div>
-      </div>`).join('')}
+    <p class="muted">💡 上の図で直接タップしても選べるよ。</p>
+    ${r.fixtures.map((fx, i) => fxCard(fx, i)).join('')}
     <div class="row"><button class="btn" data-act="addFx">＋作り付けを追加</button></div>
     <h4>窓・ドア — 位置は壁の端(左 or 玄関側)からの距離</h4>
-    ${r.openings.map((o, i) => `
-      <div class="card" data-op="${i}">
-        <div class="card-title"><span>${esc(o.name)}</span><button data-act="delOp" data-i="${i}">削除</button></div>
-        <div class="field two">${txt('名前', 'op-name', o.name)}<label class="in">種類<select data-k="op-kind"><option value="window" ${o.kind === 'window' ? 'selected' : ''}>窓</option><option value="door" ${o.kind === 'door' ? 'selected' : ''}>ドア</option></select></label></div>
-        <div class="field two"><label class="in">どの壁<select data-k="op-wall">${WALLS.map(([v, n]) => `<option value="${v}" ${v === o.wall ? 'selected' : ''}>${n}</option>`).join('')}</select></label>${num('端からの距離', 'op-start', o.start, { step: 5 })}</div>
-        <div class="field">${num('幅', 'op-width', o.width, { min: 10 })}${num('床からの高さ', 'op-sill', o.sill, { min: 0 })}${num('窓の高さ', 'op-height', o.height, { min: 10 })}</div>
-      </div>`).join('')}
+    ${r.openings.map((o, i) => opCard(o, i)).join('')}
     <div class="row"><button class="btn" data-act="addOp">＋窓を追加</button></div>
     <h4>まとめて変える</h4>
     <p class="muted">図面と左右が逆になっていたら、反転すると作り付け・窓・家具がまとめて入れ替わるよ。</p>
@@ -611,6 +709,18 @@ function bindPanel(body) {
     const n = parseFloat(raw);
     const f = app.selected();
     const r = app.state.room;
+    // 作り付け・窓ドアのカード(どのタブにあっても同じ)
+    if (k.startsWith('fx-') || k.startsWith('op-')) {
+      const isFx = k.startsWith('fx-');
+      const card = e.target.closest(isFx ? '[data-fx]' : '[data-op]');
+      const obj = isFx ? r.fixtures[+card.dataset.fx] : r.openings[+card.dataset.op];
+      const key = k.slice(3);
+      if (['name', 'kind', 'wall'].includes(key)) obj[key] = raw; else { if (isNaN(n)) return; obj[key] = n; }
+      if (key === 'name') card.querySelector('.card-title span').textContent = raw;
+      app.changed({ keepPanel: true });
+      if (key === 'kind') refreshQuick();
+      return;
+    }
     if (app.tab === 'item' && f) {
       if (k === 'sizeText') return;
       if (['w', 'd', 'h', 'x', 'y', 'seat', 'rot', 'elev'].includes(k)) { if (isNaN(n)) return; f[k] = k === 'w' || k === 'd' ? Math.max(1, n) : n; }
@@ -627,17 +737,6 @@ function bindPanel(body) {
       if (k === 'roomName') { curRoom().name = raw || '部屋'; renderRoomBar(); save({ record: false }); return; }
       if (k === 'u-opacity') { app.state.underlay.opacity = n; app.changed({ keepPanel: true }); return; }
       if (k.startsWith('r-')) { if (isNaN(n)) return; r[k.slice(2)] = n; }
-      else if (k.startsWith('fx-')) {
-        const fx = r.fixtures[+e.target.closest('[data-fx]').dataset.fx];
-        const key = k.slice(3);
-        if (['name', 'kind'].includes(key)) fx[key] = raw; else { if (isNaN(n)) return; fx[key] = n; }
-        if (key === 'name') e.target.closest('.card').querySelector('.card-title span').textContent = raw;
-      } else if (k.startsWith('op-')) {
-        const o = r.openings[+e.target.closest('[data-op]').dataset.op];
-        const key = k.slice(3);
-        if (['name', 'kind', 'wall'].includes(key)) o[key] = raw; else { if (isNaN(n)) return; o[key] = n; }
-        if (key === 'name') e.target.closest('.card').querySelector('.card-title span').textContent = raw;
-      }
       app.changed({ keepPanel: true });
     } else if (app.tab === 'more') {
       const v = app.state.view;
@@ -720,9 +819,13 @@ function bindPanel(body) {
       case 'toggleUnderlay': app.state.underlay.show = app.state.underlay.show === false; app.changed(); break;
       case 'removeUnderlay': ask('間取り図の画像を外す？(なぞって作った間取りはそのまま残るよ)', () => { app.state.underlay = null; app.underlayImg = null; app.changed(); }); break;
       case 'addFx': r.fixtures.push({ id: newId('fx'), kind: 'closet', name: '収納', x: 0, y: 200, w: 60, d: 45, h: 180 }); app.changed(); break;
-      case 'delFx': ask('この作り付けを削除する？', () => { r.fixtures.splice(+b.dataset.i, 1); app.changed(); }); break;
+      case 'delFx': removeFx(r.fixtures[+b.dataset.i]); break;
+      case 'pickFx': setSel(null, r.fixtures[+b.dataset.i].id, null); toast('図の上でピンクになってるよ'); break;
+      case 'rotFx': rotateFx(app.selectedFx()); break;
+      case 'dupFx': duplicateFx(app.selectedFx()); break;
       case 'addOp': r.openings.push({ id: newId('op'), kind: 'window', name: '窓', wall: 'right', start: 300, width: 90, sill: 90, height: 100 }); app.changed(); break;
-      case 'delOp': ask('この窓・ドアを削除する？', () => { r.openings.splice(+b.dataset.i, 1); app.changed(); }); break;
+      case 'delOp': removeOp(r.openings[+b.dataset.i]); break;
+      case 'pickOp': setSel(null, null, r.openings[+b.dataset.i].id); toast('図の上でピンクになってるよ'); break;
       case 'resetRoom': ask('間取りを最初の状態に戻す？(家具はそのまま)', () => { app.state.room = defaultRoom(); app.changed(); app.plan2d.fit(); }); break;
       case 'flipRoom': flipRoom(); app.changed(); toast('左右を反転したよ。戻すときはもう一度押してね'); break;
       case 'resetAll': ask('この部屋の家具・間取り・案A〜Cをリセットする？(↶で元に戻せるよ)', () => { replaceState(defaultState()); }); break;

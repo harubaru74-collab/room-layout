@@ -35,11 +35,7 @@
       <button id="undoBtn" title="元に戻す (Ctrl+Z)" aria-label="元に戻す" disabled>↶</button>
       <button id="redoBtn" title="やり直す (Ctrl+Y)" aria-label="やり直す" disabled>↷</button>
     </div>
-    <div class="float-tools" id="quickTools" hidden>
-      <button data-act="rot90" title="90度回転">⟳ 90°</button>
-      <button data-act="dup">複製</button>
-      <button data-act="del" class="danger">削除</button>
-    </div>
+    <div class="float-tools" id="quickTools" hidden></div>
     <div class="fabs">
       <button class="fab" data-shot title="今の画面を画像で保存 (P)" aria-label="画像で保存">📷</button>
       <button class="fab" id="fitBtn" title="全体を表示" aria-label="全体を表示">⤢</button>
@@ -72,7 +68,7 @@
   <div class="sheet-body" id="sheetBody"></div>
 </div>
 <nav class="tabs" id="tabs">
-  <button data-tab="item">選んだ家具</button>
+  <button data-tab="item">選んだもの</button>
   <button data-tab="add">＋家具を追加</button>
   <button data-tab="room">部屋の設定</button>
   <button data-tab="more">見た目・保存</button>
