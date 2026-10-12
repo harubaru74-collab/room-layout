@@ -6,7 +6,7 @@ import {
 import { create2D, drawThumb } from './plan2d.js';
 import { analyze, isFlat, isWallHung, bbox, corners } from './geom.js';
 import { readProduct, analyzeImage, fileToDataUrl } from './importer.js';
-import { putImage, getImage, delImage } from './imagestore.js';
+import { putImage, getImage, delImage, listImageIds } from './imagestore.js';
 
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -645,7 +645,7 @@ function roomPanel() {
     ${!u ? `<p class="muted">SUUMOなどの間取り図のスクショを下に敷いて、上からなぞって作れるよ。</p>
       <div class="row"><label class="btn primary">🖼 間取り図の画像を選ぶ<input type="file" accept="image/*" data-act="underlayFile" hidden></label></div>` : `
       <div class="steps">
-        <div class="step"><b>⓪</b> 間取り図の部分だけ切り抜く <div class="row"><button class="btn" data-act="cropImg">✂️ 切り抜く</button></div></div>
+        <div class="step"><b>⓪</b> 間取り図の部分だけ切り抜く <div class="row"><button class="btn" data-act="cropImg">✂️ 切り抜く</button><button class="btn" data-act="recrop">↺ 元の画像から切り抜き直す</button></div></div>
         <div class="step"><b>①</b> 縮尺を合わせる
           <div class="row"><button class="btn" data-act="calibArea">洋室をなぞって帖数を入れる</button><button class="btn" data-act="calib">2点をタップして長さを入れる</button></div></div>
         <div class="step"><b>②</b> 位置を合わせる <div class="row"><button class="btn" data-act="moveImg">✋ 画像をドラッグで動かす</button></div></div>
@@ -822,6 +822,7 @@ function bindPanel(body) {
       }
       case 'newRoom': addRoom(false); break;
       case 'copyRoom': addRoom(true); break;
+      case 'recrop': recrop(); break;
       case 'cropImg': case 'calib': case 'calibArea': case 'moveImg': case 'roomRect': case 'fxRect': case 'opRect': startTool(b.dataset.act); break;
       case 'toggleUnderlay': app.state.underlay.show = app.state.underlay.show === false; app.changed(); break;
       case 'removeUnderlay': ask('間取り図の画像を外す？(なぞって作った間取りはそのまま残るよ)', () => { app.state.underlay = null; app.underlayImg = null; app.changed(); }); break;
@@ -858,6 +859,26 @@ function loadUnderlay() {
     img.src = data;
   }));
 }
+// 切り抜く前の元の画像に戻して、もう一度切り抜く
+async function recrop() {
+  const u = app.state.underlay;
+  if (!u) return;
+  const origId = u.orig || u.id;
+  const data = await getImage(origId);
+  if (!data) { toast('元の画像が見つからなかったよ。「画像を変える」で選び直してね'); return; }
+  const w = await new Promise(res => { const im = new Image(); im.onload = () => res(im.naturalWidth); im.onerror = () => res(0); im.src = data; });
+  app.state.underlay = { ...u, id: origId, orig: origId, x: 0, y: 0, scale: app.state.room.w / (w || 1000), show: true };
+  app.underlayImg = null;
+  await loadUnderlay();
+  app.changed();
+  startTool('cropImg');
+}
+// どの部屋からも使われていない画像を片付ける(起動したときに1回だけ)
+async function cleanupImages() {
+  const used = new Set();
+  for (const r of store.rooms) { const u = r.state.underlay; if (u) { used.add(u.id); if (u.orig) used.add(u.orig); } }
+  for (const id of await listImageIds()) if (!used.has(id)) delImage(id);
+}
 // 画像の一部(rect: 部屋の座標cm)だけを切り抜いて、部屋の横幅に合わせて置き直す
 async function cropUnderlay(rect) {
   const u = app.state.underlay, img = app.underlayImg;
@@ -870,9 +891,9 @@ async function cropUnderlay(rect) {
   c.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, c.width, c.height);
   const id = newId('img');
   await putImage(id, c.toDataURL('image/jpeg', 0.9));
-  if (!store.rooms.some(x => x.id !== store.current && x.state.underlay && x.state.underlay.id === u.id)) delImage(u.id);
   const r = app.state.room;
-  app.state.underlay = { ...u, id, x: 0, y: 0, scale: r.w / c.width };
+  // 元の画像(orig)は残しておく → 「切り抜き直す」や ↶ で戻せる
+  app.state.underlay = { ...u, id, orig: u.orig || u.id, x: 0, y: 0, scale: r.w / c.width };
   app.underlayImg = null;
   await loadUnderlay();
   app.changed();
@@ -883,11 +904,9 @@ async function setUnderlayFile(file) {
     const id = newId('img');
     await putImage(id, dataUrl);
     const r = app.state.room;
-    const old = app.state.underlay;
     // はじめは、画像の横幅 = 部屋の横幅 になるように置く
-    app.state.underlay = { id, x: 0, y: 0, scale: r.w / w, opacity: 0.6, show: true };
+    app.state.underlay = { id, orig: id, x: 0, y: 0, scale: r.w / w, opacity: 0.6, show: true };
     app.underlayImg = null;
-    if (old && !store.rooms.some(x => x.state.underlay && x.state.underlay.id === old.id)) delImage(old.id);
     await loadUnderlay();
     app.changed();
     // まずは間取り図の部分だけ切り抜いてもらう(スクショだと周りに余計なものが入るので)
@@ -1073,7 +1092,7 @@ async function exportJson() {
   curRoom().state = app.state;
   // 間取り図の画像も一緒に入れる
   const images = {};
-  for (const r of store.rooms) if (r.state.underlay) { const d = await getImage(r.state.underlay.id); if (d) images[r.state.underlay.id] = d; }
+  for (const r of store.rooms) if (r.state.underlay) for (const id of [r.state.underlay.id, r.state.underlay.orig]) { if (!id || images[id]) continue; const d = await getImage(id); if (d) images[id] = d; }
   const blob = new Blob([JSON.stringify({ ...store, images })], { type: 'application/json' });
   downloadBlob(blob, `room-layout-backup_${stamp()}.json`, 'バックアップを保存したよ');
 }
@@ -1126,6 +1145,7 @@ renderRoomBar();
 updateNightBtn();
 loadUnderlay();
 pushHistory();
+cleanupImages();
 requestAnimationFrame(() => app.plan2d.resize());
 initCloud();
 
