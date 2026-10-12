@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#e05297">
+<title>おへやレイアウト</title>
+<link rel="stylesheet" href="style.css">
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script>
+</head>
+<body>
+<header class="top">
+  <div class="seg" id="modeSeg">
+    <button data-mode="2d" class="on">上から見る</button>
+    <button data-mode="3d">部屋の中を見る</button>
+  </div>
+  <div class="seg small" id="planSeg"></div>
+</header>
+<div class="notice">⚠ 寸法は概算です。契約前に図面の実寸で確認してください</div>
+
+<main id="stage">
+  <section id="view2d" class="view on">
+    <canvas id="canvas2d"></canvas>
+    <div class="status" id="status"></div>
+    <div class="float-tools" id="quickTools" hidden>
+      <button data-act="rot90" title="90度回転">⟳ 90°</button>
+      <button data-act="dup">複製</button>
+      <button data-act="del" class="danger">削除</button>
+    </div>
+    <button class="fab" id="fitBtn" title="全体を表示">⤢</button>
+  </section>
+  <section id="view3d" class="view">
+    <div class="presets" id="presets">
+      <button data-p="night" id="nightBtn">🌙 夜</button>
+      <button data-p="entrance">玄関から</button>
+      <button data-p="window">窓側から</button>
+      <button data-p="bed">ベッドに座る</button>
+      <button data-p="sofa">ソファに座る</button>
+    </div>
+    <div class="joystick" id="joystick"><div class="knob"></div></div>
+    <div class="hint3d" id="hint3d">左下のスティックで歩く・画面をドラッグで見回す<br><span class="pc">PC: WASD / 矢印キー + マウスドラッグ</span></div>
+    <div class="toast" id="toast" hidden></div>
+  </section>
+</main>
+
+<div class="sheet" id="sheet" hidden>
+  <div class="sheet-head"><span id="sheetTitle"></span><button id="sheetClose" aria-label="閉じる">✕</button></div>
+  <div class="sheet-body" id="sheetBody"></div>
+</div>
+<nav class="tabs" id="tabs">
+  <button data-tab="item">選んだ家具</button>
+  <button data-tab="add">＋家具を追加</button>
+  <button data-tab="room">部屋の設定</button>
+  <button data-tab="more">見た目・保存</button>
+</nav>
+<div class="ask" id="ask" hidden>
+  <div class="ask-box"><p id="askMsg"></p><div class="row"><button class="btn" id="askNo">やめる</button><button class="btn primary" id="askYes">OK</button></div></div>
+</div>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
