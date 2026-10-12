@@ -642,7 +642,7 @@ export function create3D(container, app) {
   const dom = renderer.domElement;
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const pts = new Map();
-  let gesture = null, tap = null;
+  let gesture = null, tap = null, lastTap = null;
   function newGesture(e) {
     const list = [...pts.values()];
     if (list.length >= 2) {
@@ -657,6 +657,15 @@ export function create3D(container, app) {
     pts.set(e.pointerId, [e.clientX, e.clientY]);
     gesture = newGesture(e);
     tap = pts.size === 1 ? { x: e.clientX, y: e.clientY, t: performance.now() } : null;
+    // 選んでいる家具の上から触ったら、その家具を床の上で動かす
+    if (gesture.kind === 'one' && app.selId) {
+      const hit = hitAt(e.clientX, e.clientY);
+      const f = app.selected();
+      if (hit && f && hit.id === f.id) {
+        const p = floorAt(e.clientX, e.clientY);
+        if (p) gesture = { kind: 'moveF', f, ox: f.x * M - p.x, oz: f.y * M - p.z, moved: false };
+      }
+    }
   });
   dom.addEventListener('pointermove', e => {
     const prev = pts.get(e.pointerId);
@@ -676,6 +685,19 @@ export function create3D(container, app) {
       gesture.dist = dist; gesture.mid = mid;
       return;
     }
+    if (gesture.kind === 'moveF') {
+      const p = floorAt(e.clientX, e.clientY);
+      if (!p) return;
+      const f = gesture.f;
+      f.x = Math.round((p.x + gesture.ox) / M / 5) * 5;
+      f.y = Math.round((p.z + gesture.oz) / M / 5) * 5;
+      app.plan2d.snapToWalls(f);
+      gesture.moved = true;
+      // 部屋全体は作り直さず、その家具だけ動かす(軽くするため)
+      const g = furnGroup && furnGroup.children.find(c => c.userData.id === f.id);
+      if (g) g.position.set(f.x * M, 0, f.y * M);
+      return;
+    }
     const dx = e.clientX - prev[0], dy = e.clientY - prev[1];
     if (camMode === 'orbit') {
       if (gesture.kind === 'pan') panBy(dx, dy);
@@ -689,7 +711,17 @@ export function create3D(container, app) {
   const endPointer = e => {
     if (!pts.has(e.pointerId)) return;
     pts.delete(e.pointerId);
-    if (tap && e.type === 'pointerup' && performance.now() - tap.t < 400) pick(e.clientX, e.clientY);
+    if (gesture && gesture.kind === 'moveF' && gesture.moved) { app.changed(); tap = null; }
+    if (tap && e.type === 'pointerup' && performance.now() - tap.t < 400) {
+      const now = performance.now();
+      const id = pick(e.clientX, e.clientY);
+      // 何もない床をダブルタップ → そこを中心に見る(俯瞰)/そこへ歩いていく(歩く)
+      if (!id && lastTap && now - lastTap.t < 400 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 30) {
+        const p = floorAt(e.clientX, e.clientY);
+        if (p) goTo(p.x, p.z);
+        lastTap = null;
+      } else lastTap = { t: now, x: e.clientX, y: e.clientY };
+    }
     tap = null;
     gesture = pts.size ? newGesture(null) : null;
   };
@@ -721,16 +753,41 @@ export function create3D(container, app) {
     orbit.tz = clamp(orbit.tz - rz * dx * k + fz * dy * k, -1, room.d * M + 1);
   }
 
-  // 3Dで家具をタップしたら、その家具を選ぶ
+  // 画面の点から、どの家具に当たるか・床のどこに当たるか
   const ray = new THREE.Raycaster();
-  function pick(clientX, clientY) {
-    if (!furnGroup) return;
+  const floorPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+  function aim(clientX, clientY) {
     const r = dom.getBoundingClientRect();
     ray.setFromCamera(new THREE.Vector2((clientX - r.left) / r.width * 2 - 1, -(clientY - r.top) / r.height * 2 + 1), camera);
+  }
+  function hitAt(clientX, clientY) {
+    if (!furnGroup) return null;
+    aim(clientX, clientY);
     const hit = ray.intersectObjects(furnGroup.children, true)[0];
     let o = hit && hit.object;
     while (o && !o.userData.id) o = o.parent;
-    app.pick3d?.(o ? o.userData.id : null);
+    return o ? { id: o.userData.id } : null;
+  }
+  function floorAt(clientX, clientY) {
+    aim(clientX, clientY);
+    return ray.ray.intersectPlane(floorPlane, new THREE.Vector3());
+  }
+  // 3Dで家具をタップしたら、その家具を選ぶ
+  function pick(clientX, clientY) {
+    const h = hitAt(clientX, clientY);
+    app.pick3d?.(h ? h.id : null);
+    return h ? h.id : null;
+  }
+  // 視点の移動先(床の上の点)
+  function goTo(x, z) {
+    const { room } = app.state;
+    if (camMode === 'orbit') { orbit.tx = clamp(x, 0, room.w * M); orbit.tz = clamp(z, 0, room.d * M); app.toast3d?.('ここを中心に見るよ'); }
+    else { cam.x = clamp(x, 0.15, room.w * M - 0.15); cam.z = clamp(z, 0.15, room.d * M - 0.15); }
+  }
+  // +/− ボタン: 俯瞰は近づく/離れる、歩くときは前/後ろへ
+  function zoom(dir) {
+    if (camMode === 'orbit') orbit.dist = clamp(orbit.dist * (dir > 0 ? 1 / 1.2 : 1.2), 1.5, 30);
+    else moveForward(dir * 0.4);
   }
 
   function setupJoystick(el) {
@@ -763,8 +820,11 @@ export function create3D(container, app) {
       if (keys['arrowright']) orbit.theta -= 1.5 * dt;
       if (keys['arrowup']) orbit.phi = clamp(orbit.phi - 1.2 * dt, 0.02, 1.5);
       if (keys['arrowdown']) orbit.phi = clamp(orbit.phi + 1.2 * dt, 0.02, 1.5);
-      const px = (keys['d'] ? 1 : 0) - (keys['a'] ? 1 : 0), py = (keys['s'] ? 1 : 0) - (keys['w'] ? 1 : 0);
-      if (px || py) panBy(-px * 400 * dt, -py * 400 * dt);
+      const px = (keys['d'] ? 1 : 0) - (keys['a'] ? 1 : 0) + joy.x, py = (keys['s'] ? 1 : 0) - (keys['w'] ? 1 : 0) + joy.y;
+      // 左下のスティック(PCは WASD)で、見ている場所を前後左右に動かす
+      if (px || py) panBy(-px * 450 * dt, -py * 450 * dt);
+      if (keys['q']) orbit.dist = clamp(orbit.dist * (1 + dt), 1.5, 30);
+      if (keys['e']) orbit.dist = clamp(orbit.dist / (1 + dt), 1.5, 30);
       return;
     }
     let fw = 0, st = 0;
@@ -902,7 +962,10 @@ export function create3D(container, app) {
     markDirty() { dirty = true; },
     resetEye() { cam.eye = null; },
     get camMode() { return camMode; },
-    preset, setupJoystick, resize,
+    preset, setupJoystick, resize, zoom,
+    // 動作確認用
+    _orbit: () => ({ ...orbit }),
+    _project(x, y, z) { const v = new THREE.Vector3(x, y, z).project(camera); const r = dom.getBoundingClientRect(); return [r.left + (v.x + 1) / 2 * r.width, r.top + (1 - v.y) / 2 * r.height]; },
     snapshot() { if (dirty) rebuild(); updateSelection(); placeCamera(); renderer.render(scene, camera); return dom.toDataURL('image/png'); },
   };
 }
