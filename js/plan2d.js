@@ -64,9 +64,14 @@ export function create2D(canvas, app) {
       const [a, b] = [...pointers.values()];
       if (tool && tool.a) { tool.a = tool.b = null; } // 2本指になったらなぞりは取り消し
       drag = { mode: 'pinch', dist: Math.hypot(a[0] - b[0], a[1] - b[1]), mid: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], s: view.s, ox: view.ox, oy: view.oy };
+      // 画像を動かすモードのときは、2本指で画像そのものを拡大縮小
+      const u = app.state.underlay;
+      if (tool && tool.kind === 'moveImg' && u) Object.assign(drag, { mode: 'pinchImg', u0: { ...u }, midCm: toCm(...drag.mid) });
       return;
     }
     const [x, y] = toCm(sx, sy);
+    // なぞっている途中でも、右ドラッグ・Shift+ドラッグ・中ボタンで図を動かせる
+    if (tool && (e.button === 1 || e.button === 2 || e.shiftKey)) { drag = { mode: 'pan', sx, sy, ox: view.ox, oy: view.oy, moved: true }; return; }
     if (tool) {
       if (tool.kind === 'calib') {
         if (tool.pts.length >= 2) tool.pts = [];
@@ -145,6 +150,16 @@ export function create2D(canvas, app) {
     const [sx, sy] = evtPos(e);
     pointers.set(e.pointerId, [sx, sy]);
     if (!drag) return;
+    if (drag.mode === 'pinchImg' && pointers.size >= 2) {
+      const [a, b] = [...pointers.values()];
+      const k = Math.hypot(a[0] - b[0], a[1] - b[1]) / drag.dist;
+      const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+      const u = app.state.underlay, u0 = drag.u0, [cx, cy] = drag.midCm;
+      u.scale = u0.scale * k;
+      u.x = cx - (cx - u0.x) * k + (mid[0] - drag.mid[0]) / view.s;
+      u.y = cy - (cy - u0.y) * k + (mid[1] - drag.mid[1]) / view.s;
+      render(); return;
+    }
     if (drag.mode === 'pinch' && pointers.size >= 2) {
       const [a, b] = [...pointers.values()];
       const dist = Math.hypot(a[0] - b[0], a[1] - b[1]);
@@ -246,7 +261,7 @@ export function create2D(canvas, app) {
     if (drag.mode === 'pan' && !drag.moved) app.select(null);
     if ((drag.mode === 'move' && drag.moved) || drag.mode === 'rotate') app.changed();
     if (['resizeF', 'resizeFx', 'resizeOp'].includes(drag.mode) || (['moveFx', 'moveOp'].includes(drag.mode) && drag.moved)) app.changed();
-    if (drag.mode === 'img') app.changed();
+    if (drag.mode === 'img' || drag.mode === 'pinchImg') app.changed();
     if (drag.mode === 'tool' && tool && tool.a && tool.b) {
       const [ax, ay] = tool.a, [bx, by] = tool.b;
       const rect = { x: Math.min(ax, bx), y: Math.min(ay, by), w: Math.abs(bx - ax), h: Math.abs(by - ay) };
@@ -258,14 +273,38 @@ export function create2D(canvas, app) {
   };
   canvas.addEventListener('pointerup', end);
   canvas.addEventListener('pointercancel', end);
+  canvas.addEventListener('contextmenu', e => e.preventDefault());
   canvas.addEventListener('wheel', e => {
     e.preventDefault();
     const [sx, sy] = evtPos(e);
     const [cx, cy] = toCm(sx, sy);
+    // 画像を動かすモードでは、ホイールで画像を拡大縮小
+    if (tool && tool.kind === 'moveImg' && app.state.underlay) { scaleImgAt(e.deltaY < 0 ? 1.08 : 1 / 1.08, cx, cy); app.changed({ light: true }); return; }
     view.s = Math.min(12, Math.max(0.1, view.s * (e.deltaY < 0 ? 1.1 : 1 / 1.1)));
     view.ox = sx - cx * view.s; view.oy = sy - cy * view.s;
     render();
   }, { passive: false });
+
+  // 画像を点(cx,cy)を中心に k 倍にする
+  function scaleImgAt(k, cx, cy) {
+    const u = app.state.underlay; if (!u) return;
+    u.x = cx - (cx - u.x) * k; u.y = cy - (cy - u.y) * k; u.scale *= k;
+    render();
+  }
+  // 部屋と下に敷いた画像がどちらも見えるように表示
+  function fitAll() {
+    const room = app.state.room, u = app.state.underlay, img = app.underlayImg;
+    let x0 = 0, y0 = 0, x1 = room.w, y1 = room.d + room.balcony;
+    if (u && img && img.naturalWidth && u.show !== false) {
+      x0 = Math.min(x0, u.x); y0 = Math.min(y0, u.y);
+      x1 = Math.max(x1, u.x + img.naturalWidth * u.scale); y1 = Math.max(y1, u.y + img.naturalHeight * u.scale);
+    }
+    const pad = 30, top = 50, bottom = 170;
+    view.s = Math.max(0.05, Math.min((W - pad * 2) / (x1 - x0), (H - top - bottom) / (y1 - y0)));
+    view.ox = (W - (x1 - x0) * view.s) / 2 - x0 * view.s;
+    view.oy = top + (H - top - bottom - (y1 - y0) * view.s) / 2 - y0 * view.s;
+    render();
+  }
 
   function render() {
     if (!W) return;
@@ -278,7 +317,8 @@ export function create2D(canvas, app) {
 
   window.addEventListener('resize', resize);
   return {
-    render, resize, fit, canvas, snapToWalls,
+    render, resize, fit, fitAll, canvas, snapToWalls,
+    scaleImg(k) { const [cx, cy] = toCm(W / 2, H / 2); scaleImgAt(k, cx, cy); },
     setTool(t) { tool = t; render(); },
     _view: view, // 動作確認用
     get tool() { return tool; },
@@ -444,6 +484,8 @@ function paint(ctx, W, H, dpr, view, data) {
 
   // 家具(ラグを先に、壁掛けを最後に描く)
   const ordered = [...furniture.filter(isFlat), ...furniture.filter(f => !isFlat(f) && !isWallHung(f)), ...furniture.filter(isWallHung)];
+  // なぞっている間は、下の画像が見えるように家具をうすく
+  ctx.globalAlpha = data.tool ? 0.25 : 1;
   for (const f of ordered) {
     const pts = corners(f);
     const isBad = bad.has(f.id);
@@ -474,8 +516,10 @@ function paint(ctx, W, H, dpr, view, data) {
     if (!small) label(`${f.w}×${f.d}`, cx, cy + 8, { size: 9, color: dark ? '#eee' : '#444' });
   }
 
+  ctx.globalAlpha = 1;
+
   // 狭い通路
-  for (const g of narrow) {
+  if (!data.tool) for (const g of narrow) {
     const [a, b] = toPx(...g.p), [c, d] = toPx(...g.q);
     ctx.strokeStyle = '#dd6b20'; ctx.lineWidth = 2; ctx.setLineDash([4, 3]);
     line(a, b, c, d); ctx.setLineDash([]);

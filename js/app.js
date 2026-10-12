@@ -645,6 +645,7 @@ function roomPanel() {
     ${!u ? `<p class="muted">SUUMOなどの間取り図のスクショを下に敷いて、上からなぞって作れるよ。</p>
       <div class="row"><label class="btn primary">🖼 間取り図の画像を選ぶ<input type="file" accept="image/*" data-act="underlayFile" hidden></label></div>` : `
       <div class="steps">
+        <div class="step"><b>⓪</b> 間取り図の部分だけ切り抜く <div class="row"><button class="btn" data-act="cropImg">✂️ 切り抜く</button></div></div>
         <div class="step"><b>①</b> 縮尺を合わせる
           <div class="row"><button class="btn" data-act="calibArea">洋室をなぞって帖数を入れる</button><button class="btn" data-act="calib">2点をタップして長さを入れる</button></div></div>
         <div class="step"><b>②</b> 位置を合わせる <div class="row"><button class="btn" data-act="moveImg">✋ 画像をドラッグで動かす</button></div></div>
@@ -821,7 +822,7 @@ function bindPanel(body) {
       }
       case 'newRoom': addRoom(false); break;
       case 'copyRoom': addRoom(true); break;
-      case 'calib': case 'calibArea': case 'moveImg': case 'roomRect': case 'fxRect': case 'opRect': startTool(b.dataset.act); break;
+      case 'cropImg': case 'calib': case 'calibArea': case 'moveImg': case 'roomRect': case 'fxRect': case 'opRect': startTool(b.dataset.act); break;
       case 'toggleUnderlay': app.state.underlay.show = app.state.underlay.show === false; app.changed(); break;
       case 'removeUnderlay': ask('間取り図の画像を外す？(なぞって作った間取りはそのまま残るよ)', () => { app.state.underlay = null; app.underlayImg = null; app.changed(); }); break;
       case 'addFx': r.fixtures.push({ id: newId('fx'), kind: 'closet', name: '収納', x: 0, y: 200, w: 60, d: 45, h: 180 }); app.changed(); break;
@@ -845,16 +846,36 @@ function bindPanel(body) {
 // ---------- 間取り図を下に敷いて、なぞる ----------
 function loadUnderlay() {
   const u = app.state.underlay;
-  if (!u) { app.underlayImg = null; return; }
-  if (app.underlayImg && app.underlayImg.dataset.id === u.id) return;
+  if (!u) { app.underlayImg = null; return Promise.resolve(); }
+  if (app.underlayImg && app.underlayImg.dataset.id === u.id) return Promise.resolve();
   app.underlayImg = null;
-  getImage(u.id).then(data => {
-    if (!data || !app.state.underlay || app.state.underlay.id !== u.id) return;
+  return getImage(u.id).then(data => new Promise(resolve => {
+    if (!data || !app.state.underlay || app.state.underlay.id !== u.id) { resolve(); return; }
     const img = new Image();
     img.dataset.id = u.id;
-    img.onload = () => { if (app.state.underlay && app.state.underlay.id === u.id) { app.underlayImg = img; app.plan2d.render(); } };
+    img.onload = () => { if (app.state.underlay && app.state.underlay.id === u.id) { app.underlayImg = img; app.plan2d.render(); } resolve(); };
+    img.onerror = () => resolve();
     img.src = data;
-  });
+  }));
+}
+// 画像の一部(rect: 部屋の座標cm)だけを切り抜いて、部屋の横幅に合わせて置き直す
+async function cropUnderlay(rect) {
+  const u = app.state.underlay, img = app.underlayImg;
+  if (!u || !img) return;
+  const sx = Math.max(0, (rect.x - u.x) / u.scale), sy = Math.max(0, (rect.y - u.y) / u.scale);
+  const sw = Math.min(img.naturalWidth - sx, rect.w / u.scale), sh = Math.min(img.naturalHeight - sy, rect.h / u.scale);
+  if (sw < 20 || sh < 20) { toast('画像の上をなぞってね'); return; }
+  const c = document.createElement('canvas');
+  c.width = Math.round(sw); c.height = Math.round(sh);
+  c.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, c.width, c.height);
+  const id = newId('img');
+  await putImage(id, c.toDataURL('image/jpeg', 0.9));
+  if (!store.rooms.some(x => x.id !== store.current && x.state.underlay && x.state.underlay.id === u.id)) delImage(u.id);
+  const r = app.state.room;
+  app.state.underlay = { ...u, id, x: 0, y: 0, scale: r.w / c.width };
+  app.underlayImg = null;
+  await loadUnderlay();
+  app.changed();
 }
 async function setUnderlayFile(file) {
   try {
@@ -862,18 +883,22 @@ async function setUnderlayFile(file) {
     const id = newId('img');
     await putImage(id, dataUrl);
     const r = app.state.room;
+    const old = app.state.underlay;
     // はじめは、画像の横幅 = 部屋の横幅 になるように置く
     app.state.underlay = { id, x: 0, y: 0, scale: r.w / w, opacity: 0.6, show: true };
     app.underlayImg = null;
-    loadUnderlay();
+    if (old && !store.rooms.some(x => x.state.underlay && x.state.underlay.id === old.id)) delImage(old.id);
+    await loadUnderlay();
     app.changed();
-    toast('間取り図を敷いたよ！①から順番にやってみてね', 4000);
+    // まずは間取り図の部分だけ切り抜いてもらう(スクショだと周りに余計なものが入るので)
+    startTool('cropImg');
   } catch (e) { toast(e.message || '画像を読み込めなかったよ'); }
 }
 const TOOL_HELP = {
+  cropImg: '⓪ 画像の中の「間取り図の部分」を、指でななめになぞって切り抜いてね(いらない所は消えるよ)',
   calib: '縮尺合わせ: 長さがわかっている2点(例: 部屋の端と端)を順にタップしてね',
   calibArea: '縮尺合わせ: 帖数がわかっている部屋(例: 洋室)の四角を、指でななめになぞってね',
-  moveImg: '画像を指でドラッグして、部屋の枠に合わせてね',
+  moveImg: '画像をドラッグで動かして、2本指(PCはホイール)や＋－で大きさを合わせてね',
   roomRect: '間取り図の部屋の外枠(玄関側〜ベランダ側の壁まで)を、ななめになぞってね',
   fxRect: '作り付け(収納・キッチンなど)を1つずつなぞってね。続けて何個でもOK',
   opRect: '窓やドアを、壁に沿って細長くなぞってね。近い壁に自動でつくよ',
@@ -885,13 +910,21 @@ function startTool(kind) {
   if (app.mode !== '2d') setMode('2d');
   openTab(null);
   app.plan2d.setTool(t);
+  app.plan2d.fitAll();
   const bar = $('#toolbar');
   bar.hidden = false;
   let extra = '';
   if (kind === 'fxRect') extra = `<select id="toolKind">${KINDS.map(([v, n]) => `<option value="${v}" ${v === fxKind ? 'selected' : ''}>${n}</option>`).join('')}</select>`;
   if (kind === 'opRect') extra = `<select id="toolKind"><option value="window" ${opKind === 'window' ? 'selected' : ''}>窓</option><option value="door" ${opKind === 'door' ? 'selected' : ''}>ドア</option></select>`;
-  bar.innerHTML = `<p>${TOOL_HELP[kind]}</p><div class="row">${extra}<button class="btn primary" id="toolDone">できた</button></div>`;
+  if (kind === 'moveImg') extra = '<button class="btn" id="imgBig">＋ 大きく</button><button class="btn" id="imgSmall">－ 小さく</button>';
+  bar.innerHTML = `<p>${TOOL_HELP[kind]}</p><p class="muted pc-only">PC: 右ドラッグ(またはShift+ドラッグ)で図を動かせるよ</p>
+    <div class="row">${extra}<button class="btn" id="toolFit" title="全体を表示">⤢</button><button class="btn primary" id="toolDone">${kind === 'cropImg' ? 'やめる' : 'できた'}</button></div>`;
   $('#toolDone').onclick = endTool;
+  $('#toolFit').onclick = () => app.plan2d.fitAll();
+  if (kind === 'moveImg') {
+    $('#imgBig').onclick = () => { app.plan2d.scaleImg(1.1); app.changed({ light: true }); };
+    $('#imgSmall').onclick = () => { app.plan2d.scaleImg(1 / 1.1); app.changed({ light: true }); };
+  }
   const sel = $('#toolKind');
   if (sel) sel.onchange = () => { if (kind === 'fxRect') fxKind = sel.value; else opKind = sel.value; };
 }
@@ -900,8 +933,15 @@ function endTool() {
   $('#toolbar').hidden = true;
   app.changed();
 }
-app.onToolDone = t => {
+app.onToolDone = async t => {
   const st = app.state, u = st.underlay, r = st.room;
+  if (t.kind === 'cropImg') {
+    await cropUnderlay(t.rect);
+    endTool(); app.plan2d.fitAll();
+    toast('切り抜いたよ✂️ 次は①で縮尺を合わせてね', 4000);
+    openTab('room');
+    return;
+  }
   if (t.kind === 'calib') {
     const [a, b] = t.pts;
     const cur = Math.hypot(b[0] - a[0], b[1] - a[1]);
