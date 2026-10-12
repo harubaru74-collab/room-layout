@@ -107,9 +107,13 @@ main { position: relative; flex: 1; min-height: 0; }
   position: absolute; inset: 0; display: grid; place-items: center; font-weight: 700; color: var(--muted); background: var(--bg); z-index: 4;
 }
 .toolbar {
-  position: absolute; left: 8px; right: 8px; top: 50px; z-index: 5; background: rgba(255,255,255,.97); border: 2px solid var(--pink);
+  position: absolute; left: 50%; transform: translateX(-50%); bottom: 10px; width: min(560px, calc(100% - 76px)); z-index: 5;
+  background: rgba(255,255,255,.97); border: 2px solid var(--pink);
   border-radius: 14px; padding: 8px 10px; box-shadow: 0 4px 14px rgba(0,0,0,.15);
 }
+.toolbar .row { flex-wrap: wrap; }
+.toolbar .btn { padding: 7px 10px; }
+#view2d:has(.toolbar:not([hidden])) .float-tools { display: none; }
 .toolbar p { margin: 0; font-size: 13px; font-weight: 600; line-height: 1.45; }
 .toolbar .row { margin: 6px 0 0; justify-content: flex-end; }
 .toolbar select { font: inherit; font-size: 15px; padding: 6px; border-radius: 8px; border: 1px solid var(--line); }
@@ -243,3 +247,5 @@ a { color: var(--pink); }
 .float-tools button { padding: 8px 10px; }
 #view3d .float-tools { bottom: auto; top: 50px; left: 50%; }
 #view3d .hint3d { top: 104px; }
+@media (hover: none) { .pc-only { display: none; } }
+.toolbar p.muted { font-weight: 400; font-size: 11.5px; margin-top: 2px; }
