@@ -11,7 +11,10 @@
 <link rel="apple-touch-icon" href="icons/icon-192.png">
 <link rel="stylesheet" href="style.css">
 <script type="importmap">
-{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
 </script>
 </head>
 <body>
@@ -22,7 +25,7 @@
   </div>
   <div class="seg small" id="planSeg"></div>
 </header>
-<div class="notice">⚠ 寸法は概算です。契約前に図面の実寸で確認してください</div>
+<div class="roombar"><button id="roomBtn" title="お部屋を切り替え">🏠 <span id="roomName"></span> ▾</button><span class="notice">⚠ 寸法は概算。契約前に実寸を確認してね</span></div>
 
 <main id="stage">
   <section id="view2d" class="view on">
@@ -37,12 +40,15 @@
       <button data-act="dup">複製</button>
       <button data-act="del" class="danger">削除</button>
     </div>
-    <button class="fab" id="fitBtn" title="全体を表示">⤢</button>
+    <div class="fabs">
+      <button class="fab" data-shot title="今の画面を画像で保存 (P)" aria-label="画像で保存">📷</button>
+      <button class="fab" id="fitBtn" title="全体を表示" aria-label="全体を表示">⤢</button>
+    </div>
+    <div class="toolbar" id="toolbar" hidden></div>
   </section>
   <section id="view3d" class="view">
     <div class="presets" id="presets">
-      <button data-p="night" id="nightBtn">🌙 夜</button>
-      <button data-p="ceil" id="ceilBtn" hidden>💡 照明</button>
+      <button data-p="light" id="lightBtn">☀ 昼</button>
       <button data-p="orbit" data-cam>🔭 俯瞰</button>
       <button data-p="top" data-cam>⬇ 真上</button>
       <button data-p="entrance" data-cam>🚪 玄関から</button>
@@ -52,6 +58,11 @@
     </div>
     <div class="joystick" id="joystick"><div class="knob"></div></div>
     <div class="hint3d" id="hint3d"></div>
+    <div class="fabs">
+      <button class="fab" id="lightFab" title="照明の切り替え (L)" aria-label="照明の切り替え">☀</button>
+      <button class="fab" data-shot title="今の画面を画像で保存 (P)" aria-label="画像で保存">📷</button>
+    </div>
+    <div class="loading" id="loading3d" hidden>3Dを準備中…</div>
     <div class="toast" id="toast" hidden></div>
   </section>
 </main>
@@ -67,8 +78,15 @@
   <button data-tab="more">見た目・保存</button>
 </nav>
 <div class="ask" id="ask" hidden>
-  <div class="ask-box"><p id="askMsg"></p><div class="row"><button class="btn" id="askNo">やめる</button><button class="btn primary" id="askYes">OK</button></div></div>
+  <div class="ask-box"><p id="askMsg"></p><input id="askInput" class="ask-input" hidden><div class="row"><button class="btn" id="askNo">やめる</button><button class="btn primary" id="askYes">OK</button></div></div>
 </div>
+<div class="compare" id="compare" hidden>
+  <div class="cmp-box">
+    <div class="sheet-head"><span class="cmp-title">案を比べる</span><button data-close aria-label="閉じる">✕</button></div>
+    <div class="cmp-grid"></div>
+  </div>
+</div>
+<div class="flash" id="flash" hidden></div>
 <script type="module" src="js/app.js"></script>
 </body>
 </html>
