@@ -152,6 +152,8 @@ app.plan2d = create2D($('#canvas2d'), app);
 async function setMode(mode) {
   if (mode === '3d' && app.plan2d.tool) endTool();
   app.mode = mode;
+  // 家具の操作ボタンは、表示中の画面(2D/3D)に出す
+  $(mode === '3d' ? '#view3d' : '#view2d').appendChild($('#quickTools'));
   document.querySelectorAll('#modeSeg button').forEach(b => b.classList.toggle('on', b.dataset.mode === mode));
   $('#view2d').classList.toggle('on', mode === '2d');
   $('#view3d').classList.toggle('on', mode === '3d');
@@ -429,6 +431,9 @@ $('#presets').addEventListener('click', e => {
   setPreset(b.dataset.p);
 });
 $('#lightFab').addEventListener('click', cycleLight);
+$('#zoomIn').addEventListener('click', () => app.view3d?.zoom(1));
+$('#zoomOut').addEventListener('click', () => app.view3d?.zoom(-1));
+app.toast3d = msg => toast(msg, 1500);
 // 照明をワンタップで切り替え: 昼 → 夜(間接照明) → 夜(天井の照明ON) → 昼…
 function cycleLight() {
   const v = app.state.view;
@@ -439,8 +444,8 @@ function cycleLight() {
   toast(!v.night ? '☀ 昼' : v.ceil ? '💡 夜・天井の照明ON' : '🌙 夜・間接照明', 1500);
 }
 const HINTS = {
-  orbit: '1本指で回す・2本指で拡大/移動・家具をタップで選択<br><span class="pc">PC: ドラッグで回転・右ドラッグで移動・ホイールで拡大</span>',
-  walk: '左下のスティックで歩く・画面をドラッグで見回す<br><span class="pc">PC: WASD / 矢印キー + マウスドラッグ</span>',
+  orbit: 'ドラッグで回す・左下のスティックで視点を移動・＋－で拡大<br>床をダブルタップでそこを中心に・家具はタップで選んでドラッグで動かせるよ<br><span class="pc">PC: WASDで移動・Q/Eで拡大縮小・右ドラッグでも移動・ホイールで拡大</span>',
+  walk: '左下のスティックで歩く・画面をドラッグで見回す・床をダブルタップでそこへ移動<br>家具はタップで選んでドラッグで動かせるよ<br><span class="pc">PC: WASD / 矢印キー + マウスドラッグ</span>',
 };
 let hintTimer;
 function setPreset(p) {
@@ -450,7 +455,7 @@ function setPreset(p) {
   const h = $('#hint3d');
   h.innerHTML = HINTS[app.view3d.camMode];
   h.classList.remove('fade');
-  clearTimeout(hintTimer); hintTimer = setTimeout(() => h.classList.add('fade'), 6000);
+  clearTimeout(hintTimer); hintTimer = setTimeout(() => h.classList.add('fade'), 9000);
 }
 function updateNightBtn() {
   const v = app.state.view;
@@ -464,10 +469,10 @@ function updateNightBtn() {
   f.title = label + '(タップで切り替え)';
 }
 app.pick3d = id => {
-  if (!id) return;
+  if (!id) { if (app.selId) app.select(null); return; }
   app.select(id);
   const f = app.selected();
-  if (f && app.tab !== 'item') toast(`「${f.name}」を選んだよ。「選んだ家具」で色やサイズを変えられるよ`);
+  if (f && app.tab !== 'item') toast(`「${f.name}」を選んだよ。そのままドラッグで動かせるよ`);
 };
 
 // ---------- キーボード(PC) ----------

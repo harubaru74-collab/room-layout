@@ -166,7 +166,8 @@ a.btn { text-decoration: none; color: inherit; display: inline-block; }
 }
 .undo-bar button:disabled { opacity: .35; cursor: default; }
 .presets button.cur { background: var(--pink); color: #fff; }
-#view3d.orbit .joystick { display: none; }
+#view3d.orbit .joystick .knob { background: rgba(80,120,200,.85); }
+.fab.small { width: 40px; height: 40px; font-size: 20px; font-weight: 700; align-self: center; }
 .dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; border: 1px solid #ccc; vertical-align: -1px; }
 .dot.sq { border-radius: 3px; }
 .opt.pick { position: relative; cursor: pointer; }
@@ -240,3 +241,5 @@ a { color: var(--pink); }
 .float-tools select { font: inherit; font-size: 14px; font-weight: 600; border: 1px solid var(--line); border-radius: 10px; padding: 7px 6px; background: #fff; max-width: 9.5em; }
 .float-tools { max-width: calc(100% - 80px); flex-wrap: wrap; justify-content: center; }
 .float-tools button { padding: 8px 10px; }
+#view3d .float-tools { bottom: auto; top: 50px; left: 50%; }
+#view3d .hint3d { top: 104px; }
