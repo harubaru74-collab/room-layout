@@ -511,6 +511,7 @@ function openTab(tab) {
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
   const wasOpen = !$('#sheet').hidden;
   $('#sheet').hidden = !tab;
+  document.body.classList.toggle('sheet-open', !!tab);
   renderSheet();
   if (wasOpen !== !!tab) relayout();
 }
