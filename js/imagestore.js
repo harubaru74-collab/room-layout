@@ -25,3 +25,4 @@ function tx(mode, fn) {
 export const putImage = (id, data) => { mem.set(id, data); return tx('readwrite', s => s.put(data, id)).catch(() => {}); };
 export const getImage = id => mem.has(id) ? Promise.resolve(mem.get(id)) : tx('readonly', s => s.get(id)).catch(() => null);
 export const delImage = id => { mem.delete(id); return tx('readwrite', s => s.delete(id)).catch(() => {}); };
+export const listImageIds = () => tx('readonly', s => s.getAllKeys()).then(k => k || []).catch(() => []);
