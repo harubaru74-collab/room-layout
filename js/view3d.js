@@ -1,7 +1,7 @@
 // 部屋の中を歩いて見る(3D)。Three.js を使う
 // 単位: 1 = 1m（データの cm を 100 で割って使う）
 import * as THREE from 'three';
-import { FLOORS, WALL_COLORS } from './data.js';
+import { floorStyle, wallStyle } from './data.js';
 
 const M = 0.01;
 
@@ -18,8 +18,12 @@ export function create3D(container, app) {
   const camera = new THREE.PerspectiveCamera(70, 1, 0.05, 200);
   camera.rotation.order = 'YXZ';
   const cam = { x: 1.55, z: 0.6, yaw: Math.PI, pitch: -0.05 };
+  // 俯瞰(ふかん)モード用: 注目点のまわりを回るカメラ。theta=水平の角度、phi=真上からの傾き
+  const orbit = { tx: 1.5, tz: 4, dist: 9, theta: 0.5, phi: 0.9 };
+  let camMode = 'walk'; // 'walk' = 歩く / 'orbit' = 俯瞰
 
   let roomGroup = null, furnGroup = null, lightGroup = null;
+  let wallGroups = {}, ceilMesh = null, sceneryGroup = null;
   let dirty = true, running = false, last = 0;
   const keys = {};
   const joy = { x: 0, y: 0 };
@@ -71,8 +75,8 @@ export function create3D(container, app) {
     const { room, view } = app.state;
     const W = room.w * M, D = room.d * M, H = room.h * M, T = 0.12;
     const g = new THREE.Group();
-    const fl = FLOORS[view.floor] || FLOORS[0];
-    const wallColor = (WALL_COLORS[view.wall] || WALL_COLORS[0]).color;
+    const fl = floorStyle(view);
+    const wallColor = wallStyle(view);
 
     const tex = woodTexture(fl);
     tex.repeat.set(W / 1.2, D / 1.2);
@@ -80,17 +84,22 @@ export function create3D(container, app) {
     floor.rotation.x = -Math.PI / 2; floor.position.set(W / 2, 0, D / 2); floor.receiveShadow = true;
     g.add(floor);
 
-    const ceil = new THREE.Mesh(new THREE.PlaneGeometry(W, D), mat(0xfbfbf8, { roughness: 1, emissive: 0xffffff, emissiveIntensity: view.night ? 0.03 : 0.32 }));
+    const ceil = new THREE.Mesh(new THREE.PlaneGeometry(W, D), mat(0xfbfbf8, { roughness: 1, emissive: 0xffffff, emissiveIntensity: view.night ? (view.ceil ? 0.12 : 0.03) : 0.32 }));
     ceil.rotation.x = Math.PI / 2; ceil.position.set(W / 2, H, D / 2);
     g.add(ceil);
+    ceilMesh = ceil;
 
     const wallMat = mat(wallColor, { roughness: 0.95 });
+    // 壁ごとにグループを分ける(俯瞰のとき、手前の壁だけ消して中が見えるように)
+    wallGroups = {};
+    for (const n of ['entrance', 'balcony', 'left', 'right']) { wallGroups[n] = new THREE.Group(); g.add(wallGroups[n]); }
+    const wg = wallGroups;
     // 壁ごとに、窓・ドアの穴をあけて箱で組み立てる
     const walls = {
-      entrance: { len: W, place: (a, b, y0, y1) => box(b - a, y1 - y0, T, wallMat, (a + b) / 2, (y0 + y1) / 2, -T / 2, g) },
-      balcony: { len: W, place: (a, b, y0, y1) => box(b - a, y1 - y0, T, wallMat, (a + b) / 2, (y0 + y1) / 2, D + T / 2, g) },
-      left: { len: D, place: (a, b, y0, y1) => box(T, y1 - y0, b - a, wallMat, -T / 2, (y0 + y1) / 2, (a + b) / 2, g) },
-      right: { len: D, place: (a, b, y0, y1) => box(T, y1 - y0, b - a, wallMat, W + T / 2, (y0 + y1) / 2, (a + b) / 2, g) },
+      entrance: { len: W, place: (a, b, y0, y1) => box(b - a, y1 - y0, T, wallMat, (a + b) / 2, (y0 + y1) / 2, -T / 2, wg.entrance) },
+      balcony: { len: W, place: (a, b, y0, y1) => box(b - a, y1 - y0, T, wallMat, (a + b) / 2, (y0 + y1) / 2, D + T / 2, wg.balcony) },
+      left: { len: D, place: (a, b, y0, y1) => box(T, y1 - y0, b - a, wallMat, -T / 2, (y0 + y1) / 2, (a + b) / 2, wg.left) },
+      right: { len: D, place: (a, b, y0, y1) => box(T, y1 - y0, b - a, wallMat, W + T / 2, (y0 + y1) / 2, (a + b) / 2, wg.right) },
     };
     const frameMat = mat(0xd0d3d6, { metalness: 0.4, roughness: 0.4 });
     const glassMat = new THREE.MeshPhysicalMaterial({ color: 0xcfe8ff, transparent: true, opacity: 0.18, roughness: 0.05, metalness: 0, depthWrite: false });
@@ -104,16 +113,16 @@ export function create3D(container, app) {
         if (o.y0 > 0) wdef.place(o.a, o.b, 0, o.y0);
         if (o.y1 < H) wdef.place(o.a, o.b, o.y1, H);
         cur = Math.max(cur, o.b);
-        addOpening(g, name, o, W, D, T, frameMat, glassMat);
+        addOpening(wg[name], name, o, W, D, T, frameMat, glassMat);
       }
       if (cur < wdef.len) wdef.place(cur, wdef.len, 0, H);
     }
     // 幅木
     const skirt = mat(0xf2f0ec);
-    box(W, 0.06, 0.01, skirt, W / 2, 0.03, 0.005, g);
-    box(W, 0.06, 0.01, skirt, W / 2, 0.03, D - 0.005, g);
-    box(0.01, 0.06, D, skirt, 0.005, 0.03, D / 2, g);
-    box(0.01, 0.06, D, skirt, W - 0.005, 0.03, D / 2, g);
+    box(W, 0.06, 0.01, skirt, W / 2, 0.03, 0.005, wg.entrance);
+    box(W, 0.06, 0.01, skirt, W / 2, 0.03, D - 0.005, wg.balcony);
+    box(0.01, 0.06, D, skirt, 0.005, 0.03, D / 2, wg.left);
+    box(0.01, 0.06, D, skirt, W - 0.005, 0.03, D / 2, wg.right);
 
     for (const fx of room.fixtures) buildFixture(g, fx, H);
 
@@ -123,12 +132,14 @@ export function create3D(container, app) {
     const rail = mat(0x2f4f8f, { metalness: 0.5, roughness: 0.4 });
     box(W, 0.05, 0.05, rail, W / 2, 1.0, D + T + bal, g);
     for (let x = 0; x <= W; x += 0.5) box(0.03, 1.0, 0.03, rail, x, 0.5, D + T + bal, g);
+    // 外の景色(俯瞰のときは邪魔になるので隠す)
+    sceneryGroup = new THREE.Group(); g.add(sceneryGroup);
     const bmat = mat(0xd8d8d2);
-    box(6, 7, 4, bmat, W / 2 - 2, 2, D + 6, g);
-    box(5, 10, 4, mat(0xc9ccd0), W / 2 + 4.5, 3, D + 9, g);
-    box(4, 5, 5, mat(0xe2dccf), -4, 1.5, D + 5, g);
+    box(6, 7, 4, bmat, W / 2 - 2, 2, D + 6, sceneryGroup);
+    box(5, 10, 4, mat(0xc9ccd0), W / 2 + 4.5, 3, D + 9, sceneryGroup);
+    box(4, 5, 5, mat(0xe2dccf), -4, 1.5, D + 5, sceneryGroup);
     const tree = mat(0x5f8f4e, { roughness: 1 });
-    const t1 = new THREE.Mesh(new THREE.SphereGeometry(1.4, 12, 10), tree); t1.position.set(-1.6, 1.5, D * 0.7); g.add(t1);
+    const t1 = new THREE.Mesh(new THREE.SphereGeometry(1.4, 12, 10), tree); t1.position.set(-1.6, 1.5, D * 0.7); sceneryGroup.add(t1);
     const ground = new THREE.Mesh(new THREE.PlaneGeometry(80, 80), mat(0x9aa08f, { roughness: 1 }));
     ground.rotation.x = -Math.PI / 2; ground.position.set(W / 2, -3, D / 2); g.add(ground);
     return g;
@@ -215,8 +226,9 @@ export function create3D(container, app) {
     const darker = mat(col.clone().multiplyScalar(0.75));
     const wood = mat(0x8a6a4a);
     const leg = (lw, lh, lx, lz) => box(lw, lh, lw, wood, lx, lh / 2, lz, g);
+    const night = app.state.view.night;
     switch (f.type) {
-      case 'sofa': {
+      case 'sofa': case 'sofa1': {
         const seat = (f.seat || 41) * M;
         const arm = Math.min(0.15, w * 0.12), back = Math.min(0.22, d * 0.25);
         box(w, seat - 0.12, d, darker, 0, 0.06 + (seat - 0.12) / 2, 0, g);
@@ -312,6 +324,54 @@ export function create3D(container, app) {
         lid.position.set(0, h + 0.005, 0.03); g.add(lid);
         break;
       }
+      case 'roundtable': {
+        const r = w / 2, sz = d / w, top = 0.03;
+        const t = cyl(r, top, main, 0, h - top / 2, 0, g); t.scale.z = sz;
+        cyl(0.035, h - top, darker, 0, (h - top) / 2, 0, g);
+        const base = cyl(Math.min(r * 0.55, 0.22), 0.02, darker, 0, 0.01, 0, g); base.scale.z = sz;
+        break;
+      }
+      case 'stool': {
+        const b = cyl(w / 2, h - 0.06, main, 0, (h - 0.06) / 2, 0, g); b.scale.z = d / w;
+        const c = cyl(w / 2 * 0.95, 0.06, mat(col.clone().lerp(new THREE.Color(0xffffff), 0.25)), 0, h - 0.03, 0, g); c.scale.z = d / w;
+        break;
+      }
+      case 'roundrug': {
+        const m = cyl(w / 2, 0.008, mat(col, { roughness: 1 }), 0, 0.004, 0, g);
+        m.scale.z = d / w; m.castShadow = false;
+        break;
+      }
+      case 'plant': {
+        const potH = Math.min(0.35, h * 0.3), potR = Math.min(w, d) * 0.3;
+        cyl(potR, potH, mat(0xd9d2c5), 0, potH / 2, 0, g);
+        const leaf = mat(col, { roughness: 0.9 });
+        const n = 6;
+        for (let i = 0; i < n; i++) {
+          const a = i * 2.4, rr = Math.min(w, d) * 0.22;
+          const y = potH + (h - potH) * (0.35 + 0.6 * (i / n));
+          const s = new THREE.Mesh(new THREE.SphereGeometry(Math.min(w, d) * 0.28, 10, 8), leaf);
+          s.position.set(Math.cos(a) * rr, y, Math.sin(a) * rr); s.scale.y = 0.8; s.castShadow = true;
+          g.add(s);
+        }
+        break;
+      }
+      case 'lamp': {
+        const shadeH = Math.min(0.35, h * 0.25), r = Math.min(w, d) / 2;
+        cyl(r * 0.7, 0.03, mat(0x3a3a3a, { metalness: 0.5 }), 0, 0.015, 0, g);
+        cyl(0.012, h - shadeH, mat(0x3a3a3a, { metalness: 0.5 }), 0, (h - shadeH) / 2, 0, g);
+        const shade = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.75, r, shadeH, 24, 1, true),
+          new THREE.MeshStandardMaterial({ color: col, side: THREE.DoubleSide, emissive: night ? 0xffb25e : 0x000000, emissiveIntensity: night ? 0.9 : 0, roughness: 0.9 }));
+        shade.position.y = h - shadeH / 2; g.add(shade);
+        break;
+      }
+      case 'mirror': {
+        // 壁に立てかける姿見(背中側に少し倒す)
+        const lean = new THREE.Group(); lean.rotation.x = -0.1; lean.position.z = d / 2 - 0.05; g.add(lean);
+        box(w, h, 0.03, main, 0, h / 2, 0, lean);
+        const glass = new THREE.Mesh(new THREE.PlaneGeometry(w * 0.82, h * 0.9), mat(0xe6eef4, { metalness: 0.95, roughness: 0.04 }));
+        glass.position.set(0, h / 2, 0.016); lean.add(glass);
+        break;
+      }
       case 'rack': {
         for (const y of [0.02, h * 0.4, h * 0.7, h - 0.02]) box(w, 0.025, d, main, 0, y, 0, g);
         for (const sx of [-1, 1]) for (const sz of [-1, 1]) box(0.02, h, 0.02, mat(0x666666), sx * (w / 2 - 0.02), h / 2, sz * (d / 2 - 0.02), g);
@@ -322,7 +382,14 @@ export function create3D(container, app) {
     }
     g.position.set(f.x * M, 0, f.y * M);
     g.rotation.y = -f.rot * Math.PI / 180;
+    g.userData.id = f.id;
     return g;
+  }
+
+  function cyl(r, h, material, x, y, z, parent) {
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, Math.max(h, 0.001), 28), material);
+    m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true;
+    parent.add(m); return m;
   }
 
   // ---------- 照明 ----------
@@ -351,18 +418,33 @@ export function create3D(container, app) {
       renderer.toneMappingExposure = 1.15;
       g.add(new THREE.AmbientLight(0xffd6a8, 0.18));
       g.add(new THREE.HemisphereLight(0x33405e, 0x2a1d10, 0.25));
-      // 間接照明(電球色)を部屋の角と床付近に
-      const spots = [[0.3, 0.35, D * 0.55], [W - 0.3, 0.35, D - 0.4], [0.3, H - 0.25, D - 0.5], [W / 2, 0.4, D * 0.3]];
-      for (const [x, y, z] of spots) {
-        const l = new THREE.PointLight(0xffa860, 2.4, 4.5, 1.6);
-        l.position.set(x, y, z); g.add(l);
-        const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.06, 12, 10), new THREE.MeshBasicMaterial({ color: 0xffd2a0 }));
-        bulb.position.set(x, y, z); g.add(bulb);
+      // 置いたフロアライトが光る(重くならないように6個まで)
+      const lamps = app.furniture().filter(f => f.type === 'lamp').slice(0, 6);
+      for (const f of lamps) {
+        const l = new THREE.PointLight(0xffb76b, 4, 6, 1.4);
+        l.position.set(f.x * M, Math.max(0.3, f.h * M - 0.15), f.y * M); g.add(l);
+      }
+      if (!lamps.length && !view.ceil) {
+        // フロアライトがないときは、間接照明(電球色)を部屋の角と床付近に
+        const spots = [[0.3, 0.35, D * 0.55], [W - 0.3, 0.35, D - 0.4], [0.3, H - 0.25, D - 0.5], [W / 2, 0.4, D * 0.3]];
+        for (const [x, y, z] of spots) {
+          const l = new THREE.PointLight(0xffa860, 2.4, 4.5, 1.6);
+          l.position.set(x, y, z); g.add(l);
+          const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.06, 12, 10), new THREE.MeshBasicMaterial({ color: 0xffd2a0 }));
+          bulb.position.set(x, y, z); g.add(bulb);
+        }
+      }
+      if (view.ceil) {
+        // 天井の照明をつけたとき
+        g.add(new THREE.HemisphereLight(0xfff1dc, 0x6b5a48, 0.9));
+        const l = new THREE.PointLight(0xfff0d8, 9, 9, 1.6);
+        l.position.set(W / 2, H - 0.25, D * 0.6); g.add(l);
       }
     }
     // 天井照明の見た目
+    const lit = !view.night || view.ceil;
     const lamp = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.28, 0.08, 24),
-      new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: view.night ? 0x221a10 : 0xffffff, emissiveIntensity: view.night ? 0.3 : 0.6 }));
+      new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: lit ? 0xfff4e0 : 0x221a10, emissiveIntensity: lit ? (view.night ? 1.2 : 0.6) : 0.3 }));
     lamp.position.set(W / 2, H - 0.04, D * 0.6);
     g.add(lamp);
     return g;
@@ -386,27 +468,101 @@ export function create3D(container, app) {
   }
 
   // ---------- 操作 ----------
+  // 歩くモード: 1本指ドラッグで見回す、2本指ピンチで前後に進む
+  // 俯瞰モード: 1本指ドラッグで回転、2本指ピンチで拡大縮小・2本指ドラッグで移動(PCは右ドラッグ/Shift+ドラッグで移動、ホイールで拡大縮小)
   const dom = renderer.domElement;
-  let look = null;
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const pts = new Map();
+  let gesture = null, tap = null;
+  function newGesture(e) {
+    const list = [...pts.values()];
+    if (list.length >= 2) {
+      const [a, b] = list;
+      return { kind: 'two', dist: Math.hypot(a[0] - b[0], a[1] - b[1]), mid: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2] };
+    }
+    return { kind: e && (e.button === 2 || e.shiftKey) ? 'pan' : 'one' };
+  }
+  dom.addEventListener('contextmenu', e => e.preventDefault());
   dom.addEventListener('pointerdown', e => {
     dom.setPointerCapture(e.pointerId);
-    look = { id: e.pointerId, x: e.clientX, y: e.clientY };
+    pts.set(e.pointerId, [e.clientX, e.clientY]);
+    gesture = newGesture(e);
+    tap = pts.size === 1 ? { x: e.clientX, y: e.clientY, t: performance.now() } : null;
   });
   dom.addEventListener('pointermove', e => {
-    if (!look || look.id !== e.pointerId) return;
-    const sens = e.pointerType === 'mouse' ? 0.005 : 0.006;
-    cam.yaw += (e.clientX - look.x) * sens;
-    cam.pitch = Math.max(-1.3, Math.min(1.3, cam.pitch + (e.clientY - look.y) * sens));
-    look.x = e.clientX; look.y = e.clientY;
+    const prev = pts.get(e.pointerId);
+    if (!prev || !gesture) return;
+    pts.set(e.pointerId, [e.clientX, e.clientY]);
+    if (tap && Math.hypot(e.clientX - tap.x, e.clientY - tap.y) > 8) tap = null;
+    if (gesture.kind === 'two') {
+      if (pts.size < 2) return;
+      const [a, b] = [...pts.values()];
+      const dist = Math.hypot(a[0] - b[0], a[1] - b[1]), mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+      if (camMode === 'orbit') {
+        orbit.dist = clamp(orbit.dist * gesture.dist / Math.max(dist, 1), 1.5, 30);
+        panBy(mid[0] - gesture.mid[0], mid[1] - gesture.mid[1]);
+      } else {
+        moveForward((dist - gesture.dist) * 0.012);
+      }
+      gesture.dist = dist; gesture.mid = mid;
+      return;
+    }
+    const dx = e.clientX - prev[0], dy = e.clientY - prev[1];
+    if (camMode === 'orbit') {
+      if (gesture.kind === 'pan') panBy(dx, dy);
+      else { orbit.theta -= dx * 0.008; orbit.phi = clamp(orbit.phi - dy * 0.006, 0.02, 1.5); }
+    } else {
+      const sens = e.pointerType === 'mouse' ? 0.005 : 0.006;
+      cam.yaw += dx * sens;
+      cam.pitch = clamp(cam.pitch + dy * sens, -1.3, 1.3);
+    }
   });
-  const endLook = e => { if (look && look.id === e.pointerId) look = null; };
-  dom.addEventListener('pointerup', endLook);
-  dom.addEventListener('pointercancel', endLook);
+  const endPointer = e => {
+    if (!pts.has(e.pointerId)) return;
+    pts.delete(e.pointerId);
+    if (tap && e.type === 'pointerup' && performance.now() - tap.t < 400) pick(e.clientX, e.clientY);
+    tap = null;
+    gesture = pts.size ? newGesture(null) : null;
+  };
+  dom.addEventListener('pointerup', endPointer);
+  dom.addEventListener('pointercancel', endPointer);
+  dom.addEventListener('wheel', e => {
+    e.preventDefault();
+    const k = e.deltaY > 0 ? 1 : -1;
+    if (camMode === 'orbit') orbit.dist = clamp(orbit.dist * (k > 0 ? 1.1 : 1 / 1.1), 1.5, 30);
+    else moveForward(-k * 0.25);
+  }, { passive: false });
   window.addEventListener('keydown', e => {
     if (e.target.closest && e.target.closest('input,select,textarea')) return;
     keys[e.key.toLowerCase()] = true;
   });
   window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+  window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
+
+  function moveForward(m) {
+    cam.x += -Math.sin(cam.yaw) * m;
+    cam.z += -Math.cos(cam.yaw) * m;
+  }
+  function panBy(dx, dy) {
+    const k = orbit.dist * 0.0016;
+    const rx = Math.cos(orbit.theta), rz = -Math.sin(orbit.theta);   // 画面の右方向(床の上)
+    const fx = -Math.sin(orbit.theta), fz = -Math.cos(orbit.theta);  // 画面の奥方向(床の上)
+    const { room } = app.state;
+    orbit.tx = clamp(orbit.tx - rx * dx * k + fx * dy * k, -1, room.w * M + 1);
+    orbit.tz = clamp(orbit.tz - rz * dx * k + fz * dy * k, -1, room.d * M + 1);
+  }
+
+  // 3Dで家具をタップしたら、その家具を選ぶ
+  const ray = new THREE.Raycaster();
+  function pick(clientX, clientY) {
+    if (!furnGroup) return;
+    const r = dom.getBoundingClientRect();
+    ray.setFromCamera(new THREE.Vector2((clientX - r.left) / r.width * 2 - 1, -(clientY - r.top) / r.height * 2 + 1), camera);
+    const hit = ray.intersectObjects(furnGroup.children, true)[0];
+    let o = hit && hit.object;
+    while (o && !o.userData.id) o = o.parent;
+    app.pick3d?.(o ? o.userData.id : null);
+  }
 
   function setupJoystick(el) {
     const knob = el.querySelector('.knob');
@@ -432,6 +588,16 @@ export function create3D(container, app) {
   }
 
   function step(dt) {
+    const { room } = app.state;
+    if (camMode === 'orbit') {
+      if (keys['arrowleft']) orbit.theta += 1.5 * dt;
+      if (keys['arrowright']) orbit.theta -= 1.5 * dt;
+      if (keys['arrowup']) orbit.phi = clamp(orbit.phi - 1.2 * dt, 0.02, 1.5);
+      if (keys['arrowdown']) orbit.phi = clamp(orbit.phi + 1.2 * dt, 0.02, 1.5);
+      const px = (keys['d'] ? 1 : 0) - (keys['a'] ? 1 : 0), py = (keys['s'] ? 1 : 0) - (keys['w'] ? 1 : 0);
+      if (px || py) panBy(-px * 400 * dt, -py * 400 * dt);
+      return;
+    }
     let fw = 0, st = 0;
     if (keys['w'] || keys['arrowup']) fw += 1;
     if (keys['s'] || keys['arrowdown']) fw -= 1;
@@ -447,10 +613,34 @@ export function create3D(container, app) {
       cam.x += (sx * fw + rx * st) * speed * dt;
       cam.z += (sz * fw + rz * st) * speed * dt;
     }
-    const { room } = app.state;
     const m = 0.15;
-    cam.x = Math.max(m, Math.min(room.w * M - m, cam.x));
-    cam.z = Math.max(m, Math.min(room.d * M - m, cam.z));
+    cam.x = clamp(cam.x, m, room.w * M - m);
+    cam.z = clamp(cam.z, m, room.d * M - m);
+  }
+
+  function placeCamera() {
+    const { room } = app.state;
+    const W = room.w * M, D = room.d * M;
+    const orb = camMode === 'orbit';
+    if (orb) {
+      const sp = Math.sin(orbit.phi), ty = 0.5;
+      camera.position.set(orbit.tx + orbit.dist * sp * Math.sin(orbit.theta), ty + orbit.dist * Math.cos(orbit.phi), orbit.tz + orbit.dist * sp * Math.cos(orbit.theta));
+      camera.up.set(0, 1, 0);
+      camera.lookAt(orbit.tx, ty, orbit.tz);
+    } else {
+      camera.position.set(cam.x, (cam.eye ?? app.state.view.eye) * M, cam.z);
+      camera.rotation.set(cam.pitch, cam.yaw, 0);
+    }
+    // 俯瞰のときは天井と、カメラ側の壁を消して中をのぞけるようにする(ドールハウスみたいに)
+    const p = camera.position;
+    if (ceilMesh) ceilMesh.visible = !orb;
+    if (sceneryGroup) sceneryGroup.visible = !orb;
+    if (wallGroups.entrance) {
+      wallGroups.entrance.visible = !orb || p.z > 0;
+      wallGroups.balcony.visible = !orb || p.z < D;
+      wallGroups.left.visible = !orb || p.x > 0;
+      wallGroups.right.visible = !orb || p.x < W;
+    }
   }
 
   function loop(t) {
@@ -459,8 +649,7 @@ export function create3D(container, app) {
     const dt = Math.min(0.05, (t - last) / 1000 || 0); last = t;
     if (dirty) rebuild();
     step(dt);
-    camera.position.set(cam.x, (cam.eye ?? app.state.view.eye) * M, cam.z);
-    camera.rotation.set(cam.pitch, cam.yaw, 0);
+    placeCamera();
     renderer.render(scene, camera);
   }
 
@@ -470,13 +659,25 @@ export function create3D(container, app) {
     renderer.setSize(r.width, r.height, false);
     dom.style.width = '100%'; dom.style.height = '100%';
     camera.aspect = r.width / r.height;
-    camera.fov = camera.aspect < 0.8 ? 80 : 65;
+    updateFov();
+  }
+  // 歩くときは広角(部屋が広く見える)、俯瞰のときは望遠ぎみ(ゆがみが少ない)
+  function updateFov() {
+    const narrow = camera.aspect < 0.8;
+    camera.fov = camMode === 'orbit' ? (narrow ? 50 : 40) : (narrow ? 80 : 65);
     camera.updateProjectionMatrix();
   }
   window.addEventListener('resize', resize);
 
+  function setCamMode(m) {
+    camMode = m;
+    container.classList.toggle('orbit', m === 'orbit');
+    updateFov();
+  }
+
   // 視点プリセット。dir は平面図上で見る方向(dx,dy)
   function lookFrom(xcm, ycm, dx, dy, eye = null, pitch = -0.08) {
+    setCamMode('walk');
     cam.x = xcm * M; cam.z = ycm * M;
     cam.yaw = Math.atan2(-dx, -dy);
     cam.pitch = pitch;
@@ -490,13 +691,23 @@ export function create3D(container, app) {
     const { room } = app.state;
     const ent = room.fixtures.find(f => f.kind === 'entrance');
     const list = app.furniture();
-    if (name === 'entrance') {
+    if (name === 'orbit' || name === 'top') {
+      // 部屋全体が画面に収まる距離
+      setCamMode('orbit');
+      const W = room.w * M, D = room.d * M;
+      const aspect = camera.aspect || 0.6;
+      const vfov = (camera.fov || 70) * Math.PI / 180;
+      const need = Math.max(D, W / Math.max(aspect, 0.3)) / 2 / Math.tan(vfov / 2);
+      Object.assign(orbit, { tx: W / 2, tz: D / 2 + (name === 'top' ? 0 : 0.3), dist: clamp(need * (name === 'top' ? 1.1 : 1.05), 2, 30),
+        theta: name === 'top' ? 0 : 0.35, phi: name === 'top' ? 0.02 : 0.62 });
+      setCamMode('orbit');
+    } else if (name === 'entrance') {
       const x = ent ? ent.x + ent.w / 2 : room.w / 2, y = ent ? ent.y + ent.d * 0.6 : 40;
       lookFrom(x, y, 0, 1);
     } else if (name === 'window') {
       lookFrom(room.w / 2, room.d - 30, 0, -1);
     } else if (name === 'bed' || name === 'sofa') {
-      const f = list.find(i => i.type === name);
+      const f = list.find(i => name === 'sofa' ? (i.type === 'sofa' || i.type === 'sofa1') : i.type === 'bed');
       if (!f) return `${name === 'bed' ? 'ベッド' : 'ソファ'}がまだ置かれていないよ`;
       const [dx, dy] = frontDir(f);
       if (name === 'sofa') {
@@ -517,10 +728,11 @@ export function create3D(container, app) {
 
   return {
     start() { if (running) return; running = true; resize(); last = performance.now(); requestAnimationFrame(loop); },
-    stop() { running = false; },
+    stop() { running = false; for (const k in keys) keys[k] = false; },
     markDirty() { dirty = true; },
     resetEye() { cam.eye = null; },
+    get camMode() { return camMode; },
     preset, setupJoystick, resize,
-    snapshot() { if (dirty) rebuild(); renderer.render(scene, camera); return dom.toDataURL('image/png'); },
+    snapshot() { if (dirty) rebuild(); placeCamera(); renderer.render(scene, camera); return dom.toDataURL('image/png'); },
   };
 }

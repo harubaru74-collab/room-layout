@@ -1,0 +1,17 @@
+{
+  "name": "おへやレイアウト",
+  "short_name": "おへやレイアウト",
+  "description": "引っ越し先の部屋に家具を置いて、2D・3Dで確認できるレイアウトシミュレーター",
+  "lang": "ja",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#faf8f9",
+  "theme_color": "#e05297",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

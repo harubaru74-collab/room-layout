@@ -44,7 +44,20 @@ export const CATALOG = [
   { type: 'rack', name: 'レンジ台', w: 60, d: 45, h: 120, color: '#ffffff' },
   { type: 'washer', name: '洗濯機', w: 60, d: 60, h: 100, color: '#f6f6f6' },
   { type: 'box', name: 'その他(箱)', w: 60, d: 40, h: 60, color: '#a7c4bc' },
+  { type: 'sofa1', name: '1人掛けソファ', w: 80, d: 85, h: 75, seat: 40, color: '#efe8dc' },
+  { type: 'roundtable', name: '丸テーブル', w: 70, d: 70, h: 40, color: '#e8e2d6' },
+  { type: 'stool', name: 'スツール', w: 40, d: 40, h: 42, color: '#8a3b2e' },
+  { type: 'roundrug', name: '丸ラグ', w: 140, d: 140, h: 1, color: '#e6d9c3' },
+  { type: 'plant', name: '観葉植物', w: 40, d: 40, h: 120, color: '#5f8f4e' },
+  { type: 'lamp', name: 'フロアライト', w: 35, d: 35, h: 150, color: '#f3ead6' },
+  { type: 'mirror', name: '姿見(スタンドミラー)', w: 45, d: 30, h: 160, color: '#c8a77d' },
+  { type: 'bed', name: 'セミダブルベッド', w: 120, d: 195, h: 45, color: '#cdb89b' },
 ];
+
+// 丸い形の家具(2Dでは楕円で描く。当たり判定は外側の四角で近似)
+export const ROUND_TYPES = ['roundtable', 'stool', 'roundrug', 'plant', 'lamp'];
+// 床に敷くだけのもの(当たり判定・通路チェックから外す)
+export const FLAT_TYPES = ['rug', 'roundrug'];
 
 export const COLOR_CHIPS = ['#8d9095', '#4a4d52', '#f1ece3', '#ffffff', '#cdb89b', '#b38d5f', '#6e5440',
   '#d9c4a6', '#f2c4ce', '#e8a0b4', '#a7c4bc', '#8fb3d9', '#c9b6e4', '#e9d27a'];
@@ -64,6 +77,47 @@ export const FLOORS = [
   { name: 'ホワイトアッシュ', base: '#e2d6c4', line: '#c2b39c' },
   { name: 'グレー', base: '#a9a49d', line: '#8a857e' },
 ];
+
+// 床の色(自由入力)から木目の線の色を作る
+export function floorStyle(view) {
+  if (view.floor >= 0 && FLOORS[view.floor]) return FLOORS[view.floor];
+  const n = parseInt((view.floorColor || '#b88a5a').slice(1), 16);
+  const dk = v => Math.round(v * 0.72).toString(16).padStart(2, '0');
+  return { name: '自由', base: view.floorColor, line: '#' + dk(n >> 16 & 255) + dk(n >> 8 & 255) + dk(n & 255) };
+}
+export function wallStyle(view) {
+  if (view.wall >= 0 && WALL_COLORS[view.wall]) return WALL_COLORS[view.wall].color;
+  return view.wallColor || '#f6f4ef';
+}
+
+// 保存データの形をそろえる(古いデータ・読み込んだファイル用)。おかしいときは null
+export function normalizeState(s) {
+  if (!s || typeof s !== 'object' || !s.room || !s.plans || typeof s.plans !== 'object') return null;
+  const base = defaultState();
+  const room = { ...defaultRoom(), ...s.room };
+  if (!Array.isArray(room.fixtures)) room.fixtures = [];
+  if (!Array.isArray(room.openings)) room.openings = [];
+  const plans = {};
+  for (const [k, p] of Object.entries(s.plans)) {
+    if (!p || !Array.isArray(p.furniture)) continue;
+    plans[k] = {
+      name: String(p.name || k),
+      furniture: p.furniture.filter(f => f && typeof f === 'object').map(f => ({
+        id: f.id || 'f' + Math.random().toString(36).slice(2, 9),
+        type: f.type || 'box', name: String(f.name ?? '家具'),
+        w: +f.w || 60, d: +f.d || 40, h: +f.h || 0, seat: +f.seat || 0,
+        color: /^#[0-9a-f]{6}$/i.test(f.color) ? f.color : '#a7c4bc',
+        x: +f.x || 0, y: +f.y || 0, rot: ((+f.rot || 0) % 360 + 360) % 360, url: String(f.url || ''),
+      })),
+    };
+  }
+  if (!Object.keys(plans).length) return null;
+  return {
+    ...base, ...s, room, plans,
+    current: plans[s.current] ? s.current : Object.keys(plans)[0],
+    view: { ...base.view, ...(s.view || {}) },
+  };
+}
 
 export function makeFurniture(tpl, x, y, rot = 0) {
   return {
@@ -96,6 +150,6 @@ export function defaultState() {
       C: { name: '案C', furniture: JSON.parse(JSON.stringify(furn)) },
     },
     current: 'A',
-    view: { eye: 150, night: false, wall: 0, floor: 0 },
+    view: { eye: 150, night: false, ceil: false, wall: 0, floor: 0, wallColor: '#f6f4ef', floorColor: '#b88a5a' },
   };
 }

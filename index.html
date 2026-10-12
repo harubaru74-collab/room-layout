@@ -4,7 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <meta name="theme-color" content="#e05297">
+<meta name="description" content="引っ越し先の部屋に家具を置いて、上から(2D)と部屋の中(3D)で確認できるレイアウトシミュレーター">
 <title>おへやレイアウト</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
 <link rel="stylesheet" href="style.css">
 <script type="importmap">
 { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
@@ -24,6 +28,10 @@
   <section id="view2d" class="view on">
     <canvas id="canvas2d"></canvas>
     <div class="status" id="status"></div>
+    <div class="undo-bar">
+      <button id="undoBtn" title="元に戻す (Ctrl+Z)" aria-label="元に戻す" disabled>↶</button>
+      <button id="redoBtn" title="やり直す (Ctrl+Y)" aria-label="やり直す" disabled>↷</button>
+    </div>
     <div class="float-tools" id="quickTools" hidden>
       <button data-act="rot90" title="90度回転">⟳ 90°</button>
       <button data-act="dup">複製</button>
@@ -34,13 +42,16 @@
   <section id="view3d" class="view">
     <div class="presets" id="presets">
       <button data-p="night" id="nightBtn">🌙 夜</button>
-      <button data-p="entrance">玄関から</button>
-      <button data-p="window">窓側から</button>
-      <button data-p="bed">ベッドに座る</button>
-      <button data-p="sofa">ソファに座る</button>
+      <button data-p="ceil" id="ceilBtn" hidden>💡 照明</button>
+      <button data-p="orbit" data-cam>🔭 俯瞰</button>
+      <button data-p="top" data-cam>⬇ 真上</button>
+      <button data-p="entrance" data-cam>🚪 玄関から</button>
+      <button data-p="window" data-cam>🪟 窓側から</button>
+      <button data-p="bed" data-cam>🛏 ベッドに座る</button>
+      <button data-p="sofa" data-cam>🛋 ソファに座る</button>
     </div>
     <div class="joystick" id="joystick"><div class="knob"></div></div>
-    <div class="hint3d" id="hint3d">左下のスティックで歩く・画面をドラッグで見回す<br><span class="pc">PC: WASD / 矢印キー + マウスドラッグ</span></div>
+    <div class="hint3d" id="hint3d"></div>
     <div class="toast" id="toast" hidden></div>
   </section>
 </main>

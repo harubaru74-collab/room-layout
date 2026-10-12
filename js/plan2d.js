@@ -1,6 +1,6 @@
 // 上から見た図(2D)。canvas に描いて、指やマウスで家具を動かす
-import { corners, pointInFurniture, analyze, bbox, rectPoly } from './geom.js';
-import { FLOORS } from './data.js';
+import { corners, pointInFurniture, analyze, bbox, rectPoly, isFlat } from './geom.js';
+import { floorStyle, ROUND_TYPES } from './data.js';
 
 const SNAP = 5;
 
@@ -46,12 +46,10 @@ export function create2D(canvas, app) {
   function hitFurniture(x, y) {
     const list = app.furniture();
     // 上に描かれたもの(後ろの要素)から。ラグは最後に判定して、上の家具を優先
-    const order = [...list.filter(f => f.type !== 'rug'), ...list.filter(f => f.type === 'rug')];
-    for (let i = order.length - 1; i >= 0; i--) {
-      if (order[i].type === 'rug') continue;
-      if (pointInFurniture(order[i], x, y)) return order[i];
-    }
-    for (const f of order) if (f.type === 'rug' && pointInFurniture(f, x, y)) return f;
+    const solid = list.filter(f => !isFlat(f));
+    for (let i = solid.length - 1; i >= 0; i--) if (pointInFurniture(solid[i], x, y)) return solid[i];
+    const flat = list.filter(isFlat);
+    for (let i = flat.length - 1; i >= 0; i--) if (pointInFurniture(flat[i], x, y)) return flat[i];
     return null;
   }
 
@@ -103,6 +101,7 @@ export function create2D(canvas, app) {
     if (drag.mode === 'move') {
       drag.f.x = Math.round((x - drag.dx) / SNAP) * SNAP;
       drag.f.y = Math.round((y - drag.dy) / SNAP) * SNAP;
+      snapToWalls(drag.f);
       drag.moved = true;
       app.changed({ light: true });
     } else if (drag.mode === 'rotate') {
@@ -120,11 +119,20 @@ export function create2D(canvas, app) {
     }
   });
 
+  // 壁の近く(8cm以内)まで来たら、壁にぴったり寄せる
+  function snapToWalls(f) {
+    const { room } = app.state;
+    const b = bbox(corners(f)), g = 8;
+    if (Math.abs(b.minX) < g) f.x -= b.minX; else if (Math.abs(room.w - b.maxX) < g) f.x += room.w - b.maxX;
+    if (Math.abs(b.minY) < g) f.y -= b.minY; else if (Math.abs(room.d - b.maxY) < g) f.y += room.d - b.maxY;
+    f.x = Math.round(f.x * 10) / 10; f.y = Math.round(f.y * 10) / 10;
+  }
+
   const end = e => {
     pointers.delete(e.pointerId);
     if (!drag) return;
     if (drag.mode === 'pan' && !drag.moved) app.select(null);
-    if (drag.mode === 'move' || drag.mode === 'rotate') app.changed();
+    if ((drag.mode === 'move' && drag.moved) || drag.mode === 'rotate') app.changed();
     drag = pointers.size ? { mode: 'idle' } : null;
   };
   canvas.addEventListener('pointerup', end);
@@ -201,7 +209,7 @@ export function create2D(canvas, app) {
     label('ベランダ(南)', bx + room.w * s / 2, by + room.balcony * s / 2, { size: 12, color: '#667' });
 
     // 床
-    const fl = FLOORS[app.state.view.floor] || FLOORS[0];
+    const fl = floorStyle(app.state.view);
     const [rx, ry] = toPx(0, 0);
     ctx.fillStyle = fl.base + '55'; ctx.fillRect(rx, ry, room.w * s, room.d * s);
     ctx.strokeStyle = fl.line + '30'; ctx.lineWidth = 1;
@@ -261,25 +269,33 @@ export function create2D(canvas, app) {
     dimLine(room.w + 36 / s, 0, room.w + 36 / s, room.d, `${room.d}cm`, '#555');
 
     // 家具(ラグを先に描く)
-    const ordered = [...furniture.filter(f => f.type === 'rug'), ...furniture.filter(f => f.type !== 'rug')];
+    const ordered = [...furniture.filter(isFlat), ...furniture.filter(f => !isFlat(f))];
     for (const f of ordered) {
       const pts = corners(f);
       const isBad = bad.has(f.id);
-      poly(pts);
-      ctx.fillStyle = isBad ? 'rgba(229,62,62,.55)' : hexA(f.color, f.type === 'rug' ? 0.55 : 0.85);
+      const round = ROUND_TYPES.includes(f.type);
+      const [cx, cy] = toPx(f.x, f.y);
+      if (round) {
+        ctx.beginPath();
+        ctx.ellipse(cx, cy, f.w / 2 * s, f.d / 2 * s, f.rot * Math.PI / 180, 0, Math.PI * 2);
+      } else poly(pts);
+      ctx.fillStyle = isBad ? 'rgba(229,62,62,.55)' : hexA(f.color, isFlat(f) ? 0.55 : 0.85);
       ctx.fill();
       ctx.lineWidth = f === sel ? 3 : 1.5;
       ctx.strokeStyle = isBad ? '#c53030' : f === sel ? '#e05297' : '#444';
-      if (f.type === 'rug') ctx.setLineDash([5, 3]);
+      if (isFlat(f)) ctx.setLineDash([5, 3]);
       ctx.stroke(); ctx.setLineDash([]);
-      // 正面の印(太線)
-      const [p2, p3] = [toPx(...pts[2]), toPx(...pts[3])];
-      ctx.lineWidth = 3; ctx.strokeStyle = isBad ? '#c53030' : 'rgba(0,0,0,.45)';
-      line(p3[0], p3[1], p2[0], p2[1]);
-      const [cx, cy] = toPx(f.x, f.y);
+      // 正面の印(太線)。丸いものは向きがないので描かない
+      if (!round) {
+        const [p2, p3] = [toPx(...pts[2]), toPx(...pts[3])];
+        ctx.lineWidth = 3; ctx.strokeStyle = isBad ? '#c53030' : 'rgba(0,0,0,.45)';
+        line(p3[0], p3[1], p2[0], p2[1]);
+      }
       const dark = isDark(f.color) && !isBad;
-      label(f.name, cx, cy - 6, { size: 11, color: dark ? '#fff' : '#222', bold: true });
-      label(`${f.w}×${f.d}`, cx, cy + 8, { size: 9, color: dark ? '#eee' : '#444' });
+      // 小さい家具は文字が家具からはみ出さないように小さく
+      const small = Math.min(f.w, f.d) * s < 34;
+      label(f.name, cx, cy - (small ? 0 : 6), { size: small ? 9 : 11, color: dark && !small ? '#fff' : '#222', bold: true, bg: small ? 'rgba(255,255,255,.7)' : null });
+      if (!small) label(`${f.w}×${f.d}`, cx, cy + 8, { size: 9, color: dark ? '#eee' : '#444' });
     }
 
     // 狭い通路
@@ -308,7 +324,7 @@ export function create2D(canvas, app) {
   }
 
   window.addEventListener('resize', resize);
-  return { render, resize, fit, canvas };
+  return { render, resize, fit, canvas, snapToWalls };
 }
 
 function hexA(hex, a) {

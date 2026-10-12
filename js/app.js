@@ -1,5 +1,5 @@
 // アプリ全体のまとめ役: データの保存、画面の切り替え、設定パネル
-import { STORAGE_KEY, CATALOG, COLOR_CHIPS, WALL_COLORS, FLOORS, defaultState, defaultRoom, makeFurniture } from './data.js';
+import { STORAGE_KEY, CATALOG, COLOR_CHIPS, WALL_COLORS, FLOORS, defaultState, defaultRoom, makeFurniture, normalizeState } from './data.js';
 import { create2D } from './plan2d.js';
 
 const $ = s => document.querySelector(s);
@@ -9,15 +9,16 @@ function load() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
-      const s = JSON.parse(raw);
-      if (s && s.room && s.plans) return { ...defaultState(), ...s, view: { ...defaultState().view, ...s.view } };
+      const s = normalizeState(JSON.parse(raw));
+      if (s) return s;
     }
   } catch (e) { /* 保存データが読めないときは初期状態で始める */ }
   return defaultState();
 }
 
 let saveTimer = null, cloudTimer = null;
-function save() {
+function save({ record = true } = {}) {
+  if (record) recordHistory();
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     app.state.savedAt = Date.now();
@@ -47,11 +48,9 @@ async function initCloud() {
     cloud.doc = doc;
     const d = snap.exists ? snap.data() : null;
     if (d && typeof d.json === 'string' && (d.savedAt || 0) > (app.state.savedAt || 0)) {
-      const st = JSON.parse(d.json);
-      if (st && st.room && st.plans) {
-        app.state = { ...defaultState(), ...st, view: { ...defaultState().view, ...st.view } };
-        app.selId = null; $('#quickTools').hidden = true;
-        renderPlanSeg(); updateNightBtn(); app.changed(); app.plan2d.fit();
+      const st = normalizeState(JSON.parse(d.json));
+      if (st) {
+        replaceState(st);
         toast('保存してあったレイアウトを読み込んだよ');
       }
     } else if (!d) {
@@ -78,7 +77,7 @@ const app = {
   },
   // light: ドラッグ中など。パネルは作り直さない
   changed({ light = false, keepPanel = false } = {}) {
-    save();
+    save({ record: !light });
     app.plan2d.render();
     app.view3d?.markDirty();
     if (!light && !keepPanel && app.tab) renderSheet();
@@ -94,6 +93,45 @@ const app = {
 };
 window.app = app; // 動作確認用
 
+// 状態を丸ごと入れ替えたとき(読み込み・リセット・元に戻す)の画面の更新
+function replaceState(st, { fit = true } = {}) {
+  app.state = st;
+  if (!app.selected()) { app.selId = null; $('#quickTools').hidden = true; }
+  renderPlanSeg(); updateNightBtn(); app.changed();
+  if (fit) app.plan2d.fit();
+}
+
+// ---------- 元に戻す / やり直す ----------
+// 変更のたびに状態をまるごと文字にして積んでおく(最大80回分)
+const hist = { stack: [], idx: -1, timer: null };
+const snapshotState = () => { const { savedAt, ...rest } = app.state; return JSON.stringify(rest); };
+function pushHistory() {
+  clearTimeout(hist.timer); hist.timer = null;
+  const s = snapshotState();
+  if (hist.stack[hist.idx] === s) return;
+  hist.stack = hist.stack.slice(0, hist.idx + 1);
+  hist.stack.push(s);
+  if (hist.stack.length > 80) hist.stack.shift();
+  hist.idx = hist.stack.length - 1;
+  updateUndoBtns();
+}
+function recordHistory() { clearTimeout(hist.timer); hist.timer = setTimeout(pushHistory, 350); }
+function undoRedo(dir) {
+  if (hist.timer) pushHistory();
+  const ni = hist.idx + dir;
+  if (ni < 0 || ni >= hist.stack.length) return;
+  hist.idx = ni;
+  replaceState({ ...JSON.parse(hist.stack[ni]), savedAt: app.state.savedAt }, { fit: false });
+  updateUndoBtns();
+  toast(dir < 0 ? '元に戻したよ' : 'やり直したよ');
+}
+function updateUndoBtns() {
+  $('#undoBtn').disabled = hist.idx <= 0;
+  $('#redoBtn').disabled = hist.idx >= hist.stack.length - 1;
+}
+$('#undoBtn').addEventListener('click', () => undoRedo(-1));
+$('#redoBtn').addEventListener('click', () => undoRedo(1));
+
 // ---------- 画面の切り替え ----------
 app.plan2d = create2D($('#canvas2d'), app);
 
@@ -108,7 +146,7 @@ async function setMode(mode) {
         const { create3D } = await import('./view3d.js');
         app.view3d = create3D($('#view3d'), app);
         app.view3d.setupJoystick($('#joystick'));
-        app.view3d.preset('entrance');
+        setPreset('orbit');
       } catch (e) {
         toast('3Dの読み込みに失敗したよ。ネット接続を確認してね');
         console.error(e);
@@ -131,6 +169,7 @@ function renderPlanSeg() {
 }
 $('#planSeg').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
+  if (b.dataset.plan === app.state.current) return;
   app.state.current = b.dataset.plan;
   app.selId = null; $('#quickTools').hidden = true;
   renderPlanSeg();
@@ -154,7 +193,7 @@ function toast(msg) {
   const host = app.mode === '3d' ? $('#view3d') : $('#view2d');
   if (el.parentElement !== host) host.appendChild(el);
   el.textContent = msg; el.hidden = false;
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => { el.hidden = true; }, 2200);
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => { el.hidden = true; }, 2600);
 }
 
 // ---------- 家具の操作 ----------
@@ -173,6 +212,7 @@ function remove(f) {
 function addFurniture(tplObj) {
   const { room } = app.state;
   const f = makeFurniture(tplObj, Math.round(room.w / 2 / 5) * 5, Math.round(room.d * 0.55 / 5) * 5);
+  if (tplObj.url) f.url = tplObj.url;
   app.furniture().push(f);
   app.selId = f.id; $('#quickTools').hidden = false;
   if (app.mode !== '2d') setMode('2d');
@@ -194,16 +234,65 @@ $('#presets').addEventListener('click', e => {
   if (b.dataset.p === 'night') {
     app.state.view.night = !app.state.view.night;
     updateNightBtn(); app.changed({ keepPanel: true });
+    toast(app.state.view.night ? '夜にしたよ。💡で天井の照明をつけたり消したりできるよ' : '昼にしたよ');
     return;
   }
-  const err = app.view3d.preset(b.dataset.p);
-  if (err) toast(err);
+  if (b.dataset.p === 'ceil') {
+    app.state.view.ceil = !app.state.view.ceil;
+    updateNightBtn(); app.changed({ keepPanel: true });
+    return;
+  }
+  setPreset(b.dataset.p);
 });
-function updateNightBtn() {
-  const b = $('#nightBtn');
-  b.textContent = app.state.view.night ? '☀ 昼にする' : '🌙 夜にする';
-  b.classList.toggle('on', app.state.view.night);
+const HINTS = {
+  orbit: '1本指で回す・2本指で拡大/移動・家具をタップで選択<br><span class="pc">PC: ドラッグで回転・右ドラッグで移動・ホイールで拡大</span>',
+  walk: '左下のスティックで歩く・画面をドラッグで見回す<br><span class="pc">PC: WASD / 矢印キー + マウスドラッグ</span>',
+};
+function setPreset(p) {
+  const err = app.view3d.preset(p);
+  if (err) { toast(err); return; }
+  document.querySelectorAll('#presets button[data-cam]').forEach(b => b.classList.toggle('cur', b.dataset.p === p));
+  const h = $('#hint3d');
+  h.innerHTML = HINTS[app.view3d.camMode];
+  h.classList.remove('fade');
+  clearTimeout(hintTimer); hintTimer = setTimeout(() => h.classList.add('fade'), 7000);
 }
+let hintTimer;
+function updateNightBtn() {
+  const v = app.state.view;
+  const b = $('#nightBtn');
+  b.textContent = v.night ? '☀ 昼にする' : '🌙 夜にする';
+  b.classList.toggle('on', v.night);
+  const c = $('#ceilBtn');
+  c.hidden = !v.night;
+  c.textContent = v.ceil ? '💡 照明ON' : '💡 照明OFF';
+  c.classList.toggle('on', v.ceil);
+}
+app.pick3d = id => {
+  if (!id) return;
+  app.select(id);
+  const f = app.selected();
+  if (f && app.tab !== 'item') toast(`「${f.name}」を選んだよ。「選んだ家具」で色やサイズを変えられるよ`);
+};
+
+// ---------- キーボード(PC) ----------
+window.addEventListener('keydown', e => {
+  if (e.target.closest && e.target.closest('input,select,textarea')) return;
+  if (!$('#ask').hidden) return;
+  const mod = e.ctrlKey || e.metaKey;
+  const k = e.key.toLowerCase();
+  if (mod && k === 'z') { e.preventDefault(); undoRedo(e.shiftKey ? 1 : -1); return; }
+  if (mod && k === 'y') { e.preventDefault(); undoRedo(1); return; }
+  if (app.mode !== '2d') return;
+  const f = app.selected();
+  if (k === 'escape') { app.select(null); return; }
+  if (!f || mod) return;
+  const stepCm = e.shiftKey ? 1 : 5;
+  const mv = { arrowleft: [-stepCm, 0], arrowright: [stepCm, 0], arrowup: [0, -stepCm], arrowdown: [0, stepCm] }[k];
+  if (mv) { e.preventDefault(); f.x += mv[0]; f.y += mv[1]; app.changed(); return; }
+  if (k === 'delete' || k === 'backspace') { e.preventDefault(); remove(f); return; }
+  if (k === 'r') { rotate90(f); }
+});
 
 // パネルの開け閉めで表示エリアの大きさが変わったとき
 function relayout() {
@@ -251,7 +340,8 @@ function itemPanel() {
   return `
     <div class="field one">${txt('名前', 'name', f.name)}</div>
     <div class="field">${num('幅 cm', 'w', f.w, { min: 1 })}${num('奥行 cm', 'd', f.d, { min: 1 })}${num('高さ cm', 'h', f.h, { min: 0 })}</div>
-    ${f.type === 'sofa' ? `<div class="field">${num('座面の高さ cm', 'seat', f.seat || 41, { min: 10 })}</div>` : ''}
+    <div class="field two"><label class="in">3Dでの形<select data-k="type">${SHAPES.map(([v, n]) => `<option value="${v}" ${v === f.type ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+      ${f.type === 'sofa' || f.type === 'sofa1' ? num('座面の高さ cm', 'seat', f.seat || 41, { min: 10 }) : ''}</div>
     <label class="in">向き(回転) <b id="rotVal">${f.rot}°</b><input type="range" min="0" max="359" step="1" data-k="rot" value="${f.rot}"></label>
     <div class="row"><button class="btn" data-act="rot90">⟳ 90°回転</button><button class="btn" data-act="dup">複製</button><button class="btn danger" data-act="del">削除</button></div>
     <div class="field two">${num('位置 横(x) cm', 'x', f.x, { step: 5 })}${num('位置 縦(y) cm', 'y', f.y, { step: 5 })}</div>
@@ -263,7 +353,10 @@ function itemPanel() {
     <p class="muted">💡 太い線のある辺が家具の「正面」だよ。ピンクの⟳をドラッグすると自由に回転できるよ。</p>`;
 }
 
-const SHAPES = [['box', '箱(棚・収納など)'], ['lowtable', 'テーブル(脚つき)'], ['desk', 'デスク'], ['bookshelf', '本棚'], ['sofa', 'ソファ'], ['bed', 'ベッド'], ['futon', 'ふとん・マット'], ['rug', 'ラグ・カーペット'], ['chair', 'イス'], ['fridge', '冷蔵庫・家電'], ['rack', 'ラック']];
+const SHAPES = [['box', '箱(棚・収納など)'], ['lowtable', 'テーブル(脚つき)'], ['roundtable', '丸テーブル'], ['desk', 'デスク'], ['bookshelf', '本棚'],
+  ['sofa', 'ソファ'], ['sofa1', '1人掛けソファ'], ['bed', 'ベッド'], ['futon', 'ふとん・マット'], ['rug', 'ラグ(四角)'], ['roundrug', 'ラグ(丸)'],
+  ['chair', 'イス'], ['stool', 'スツール(丸)'], ['fridge', '冷蔵庫・家電'], ['washer', '洗濯機'], ['rack', 'ラック'], ['tvstand', 'テレビ台'],
+  ['dresser', 'ドレッサー'], ['mirror', '姿見・ミラー'], ['plant', '観葉植物'], ['lamp', 'フロアライト(夜に光る)']];
 let customDraft = { name: '', w: 60, d: 40, h: 60, color: '#a7c4bc', type: 'box', url: '' };
 function addPanel() {
   return `
@@ -305,7 +398,9 @@ function roomPanel() {
         <div class="field">${num('幅', 'op-width', o.width, { min: 10 })}${num('床からの高さ', 'op-sill', o.sill, { min: 0 })}${num('窓の高さ', 'op-height', o.height, { min: 10 })}</div>
       </div>`).join('')}
     <div class="row"><button class="btn" data-act="addOp">＋窓を追加</button></div>
-    <div class="row"><button class="btn danger" data-act="resetRoom">間取りを最初の状態に戻す</button></div>`;
+    <h4>まとめて変える</h4>
+    <p class="muted">図面と左右が逆になっていたら、反転すると作り付け・窓・家具がまとめて入れ替わるよ。</p>
+    <div class="row"><button class="btn" data-act="flipRoom">⇆ 間取りを左右反転</button><button class="btn danger" data-act="resetRoom">間取りを最初の状態に戻す</button></div>`;
 }
 
 function morePanel() {
@@ -315,11 +410,16 @@ function morePanel() {
     <h4>目線の高さ <b id="eyeVal">${v.eye}cm</b></h4>
     <input type="range" min="80" max="190" step="5" data-k="eye" value="${v.eye}">
     <h4>時間帯</h4>
-    <div class="row"><button class="opt ${!v.night ? 'on' : ''}" data-night="0">☀ 昼</button><button class="opt ${v.night ? 'on' : ''}" data-night="1">🌙 夜(間接照明)</button></div>
+    <div class="row"><button class="opt ${!v.night ? 'on' : ''}" data-night="0">☀ 昼</button><button class="opt ${v.night ? 'on' : ''}" data-night="1">🌙 夜</button></div>
     <h4>壁の色</h4>
-    <div class="row">${WALL_COLORS.map((w, i) => `<button class="opt ${i === v.wall ? 'on' : ''}" data-wall="${i}"><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:${w.color};border:1px solid #ccc;vertical-align:-1px"></span> ${w.name}</button>`).join('')}</div>
+    <div class="row">${WALL_COLORS.map((w, i) => `<button class="opt ${i === v.wall ? 'on' : ''}" data-wall="${i}"><span class="dot" style="background:${w.color}"></span> ${w.name}</button>`).join('')}
+      <label class="opt pick ${v.wall < 0 ? 'on' : ''}"><span class="dot" style="background:${v.wallColor}"></span> 好きな色<input type="color" data-k="wallColor" value="${v.wallColor}"></label></div>
     <h4>床の素材</h4>
-    <div class="row">${FLOORS.map((f, i) => `<button class="opt ${i === v.floor ? 'on' : ''}" data-floor="${i}"><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:${f.base};vertical-align:-1px"></span> ${f.name}</button>`).join('')}</div>
+    <div class="row">${FLOORS.map((f, i) => `<button class="opt ${i === v.floor ? 'on' : ''}" data-floor="${i}"><span class="dot sq" style="background:${f.base}"></span> ${f.name}</button>`).join('')}
+      <label class="opt pick ${v.floor < 0 ? 'on' : ''}"><span class="dot sq" style="background:${v.floorColor}"></span> 好きな色<input type="color" data-k="floorColor" value="${v.floorColor}"></label></div>
+    <h4>夜の照明</h4>
+    <div class="row"><button class="opt ${!v.ceil ? 'on' : ''}" data-ceil="0">間接照明だけ</button><button class="opt ${v.ceil ? 'on' : ''}" data-ceil="1">💡 天井の照明もつける</button></div>
+    <p class="muted">「フロアライト」を置くと、夜はその場所が光るよ。</p>
     <p class="muted">ラグの色は、ラグを選んで「選んだ家具」の色から変えられるよ。</p>
     <h4>レイアウト案</h4>
     <div class="field two">${txt('今の案の名前', 'planName', app.state.plans[app.state.current].name)}</div>
@@ -341,6 +441,7 @@ function bindPanel(body) {
     const r = app.state.room;
     if (app.tab === 'item' && f) {
       if (['w', 'd', 'h', 'x', 'y', 'seat', 'rot'].includes(k)) { if (isNaN(n)) return; f[k] = k === 'w' || k === 'd' ? Math.max(1, n) : n; }
+      else if (k === 'type') { f.type = raw; app.changed(); return; }
       else f[k] = raw;
       if (k === 'rot') $('#rotVal').textContent = `${f.rot}°`;
       if (k === 'color') body.querySelectorAll('.chip').forEach(c => c.classList.toggle('on', c.dataset.color === raw));
@@ -365,6 +466,8 @@ function bindPanel(body) {
     } else if (app.tab === 'more') {
       if (k === 'eye') { app.state.view.eye = n; $('#eyeVal').textContent = `${n}cm`; app.view3d?.resetEye(); save(); }
       if (k === 'planName') { app.state.plans[app.state.current].name = raw || '案'; renderPlanSeg(); save(); }
+      if (k === 'wallColor') { app.state.view.wall = -1; app.state.view.wallColor = raw; app.changed({ keepPanel: true }); markPick(e.target); }
+      if (k === 'floorColor') { app.state.view.floor = -1; app.state.view.floorColor = raw; app.changed({ keepPanel: true }); markPick(e.target); }
     }
   };
   body.onchange = e => {
@@ -383,6 +486,7 @@ function bindPanel(body) {
     if (b.dataset.night != null) { v.night = b.dataset.night === '1'; updateNightBtn(); app.changed(); return; }
     if (b.dataset.wall != null) { v.wall = +b.dataset.wall; app.changed(); return; }
     if (b.dataset.floor != null) { v.floor = +b.dataset.floor; app.changed(); return; }
+    if (b.dataset.ceil != null) { v.ceil = b.dataset.ceil === '1'; updateNightBtn(); app.changed(); return; }
     if (b.dataset.copyto) {
       const to = app.state.plans[b.dataset.copyto];
       ask(`「${to.name}」を今の案で上書きする？`, () => {
@@ -409,7 +513,8 @@ function bindPanel(body) {
       case 'addOp': r.openings.push({ id: 'op' + Date.now(), kind: 'window', name: '窓', wall: 'right', start: 300, width: 90, sill: 90, height: 100 }); app.changed(); break;
       case 'delOp': ask('この窓・ドアを削除する？', () => { r.openings.splice(+b.dataset.i, 1); app.changed(); }); break;
       case 'resetRoom': ask('間取りを最初の状態に戻す？(家具はそのまま)', () => { app.state.room = defaultRoom(); app.changed(); app.plan2d.fit(); }); break;
-      case 'resetAll': ask('家具・間取り・案A〜Cを全部リセットする？', () => { app.state = defaultState(); app.selId = null; $('#quickTools').hidden = true; renderPlanSeg(); updateNightBtn(); app.changed(); app.plan2d.fit(); }); break;
+      case 'flipRoom': flipRoom(); app.changed(); toast('左右を反転したよ。戻すときはもう一度押してね'); break;
+      case 'resetAll': ask('家具・間取り・案A〜Cを全部リセットする？(↶で元に戻せるよ)', () => { replaceState(defaultState()); }); break;
       case 'png': savePng(); break;
       case 'export': exportJson(); break;
     }
@@ -445,16 +550,43 @@ function exportJson() {
 function importFile(file) {
   if (!file) return;
   file.text().then(t => {
-    const s = JSON.parse(t);
-    if (!s.room || !s.plans) throw new Error('形式が違う');
-    app.state = { ...defaultState(), ...s };
-    app.selId = null; renderPlanSeg(); updateNightBtn(); app.changed(); app.plan2d.fit();
-    toast('読み込んだよ');
-  }).catch(() => toast('読み込めなかったよ…ファイルを確認してね'));
+    const s = normalizeState(JSON.parse(t));
+    if (!s) throw new Error('形式が違う');
+    ask('今のレイアウトを、このバックアップで置きかえる？', () => { replaceState(s); toast('読み込んだよ'); });
+  }).catch(() => toast('読み込めなかったよ…このアプリで書き出したファイルか確認してね'));
+}
+
+// 色を自由に選んだとき、ボタンの見た目だけ更新(パネルを作り直すと色選びが閉じちゃうので)
+function markPick(input) {
+  const row = input.closest('.row');
+  row.querySelectorAll('.opt').forEach(o => o.classList.remove('on'));
+  const lab = input.closest('.pick');
+  lab.classList.add('on');
+  lab.querySelector('.dot').style.background = input.value;
+}
+
+// 間取りを左右反転(作り付け・窓・すべての案の家具)
+function flipRoom() {
+  const r = app.state.room;
+  for (const fx of r.fixtures) fx.x = r.w - fx.x - fx.w;
+  for (const o of r.openings) {
+    if (o.wall === 'left') o.wall = 'right';
+    else if (o.wall === 'right') o.wall = 'left';
+    else o.start = r.w - o.start - o.width;
+  }
+  for (const p of Object.values(app.state.plans)) {
+    for (const f of p.furniture) { f.x = r.w - f.x; f.rot = (360 - f.rot) % 360; }
+  }
 }
 
 // ---------- 起動 ----------
 renderPlanSeg();
 updateNightBtn();
+pushHistory();
 requestAnimationFrame(() => app.plan2d.resize());
 initCloud();
+
+// オフラインでも開けるように(GitHub Pages などで公開したとき)
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost') && !window.claude) {
+  navigator.serviceWorker.register('sw.js').catch(() => { /* 使えなくても普通に動く */ });
+}
