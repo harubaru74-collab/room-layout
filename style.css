@@ -217,9 +217,17 @@ h4 { margin: 14px 0 4px; font-size: 13px; color: var(--muted); }
 .muted { color: var(--muted); font-size: 12px; line-height: 1.5; }
 input[type=range] { width: 100%; accent-color: var(--pink); }
 a { color: var(--pink); }
+/* PC(横に広い画面): 編集パネルは右側に出して、図をせまくしない */
 @media (min-width: 900px) {
-  .sheet { height: 38vh; }
-  .sheet-body { max-width: 760px; }
+  body { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr) auto; }
+  body.sheet-open { grid-template-columns: minmax(0, 1fr) clamp(340px, 30vw, 440px); }
+  .top, .roombar { grid-column: 1 / -1; }
+  main { grid-column: 1; grid-row: 3; }
+  .tabs { grid-column: 1; grid-row: 4; }
+  .sheet {
+    grid-column: 2; grid-row: 3 / 5; height: auto; min-height: 0;
+    border-radius: 0; box-shadow: -4px 0 18px rgba(0,0,0,.08); border-left: 1px solid var(--line);
+  }
 }
 .ask { position: fixed; inset: 0; background: rgba(30,20,30,.35); display: grid; place-items: center; z-index: 50; padding: 16px; }
 .ask-box { background: var(--card); border-radius: 14px; padding: 16px; width: min(320px, 100%); box-shadow: 0 8px 30px rgba(0,0,0,.2); }
