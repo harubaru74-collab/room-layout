@@ -83,19 +83,62 @@ export function create2D(canvas, app) {
       }
       return;
     }
-    const sel = app.selected();
+    const near = (p, r = 22) => Math.hypot(p[0] - x, p[1] - y) * view.s < r;
+    // 選んでいるものの「つまみ」(回転・大きさ)を先に調べる
+    const sel = app.selected(), sfx = app.selectedFx(), sop = app.selectedOp();
     if (sel) {
-      const [hx, hy] = handlePos(sel);
-      if (Math.hypot(hx - x, hy - y) * view.s < 22) { drag = { mode: 'rotate', f: sel }; return; }
+      if (near(handlePos(sel))) { drag = { mode: 'rotate', f: sel }; return; }
+      const cs = corners(sel);
+      for (let i = 0; i < 4; i++) if (near(cs[i], 18)) { drag = { mode: 'resizeF', f: sel, anchor: cs[(i + 2) % 4] }; return; }
+    }
+    if (sfx) {
+      const cs = fxCorners(sfx);
+      for (let i = 0; i < 4; i++) if (near(cs[i], 18)) { drag = { mode: 'resizeFx', fx: sfx, anchor: cs[(i + 2) % 4] }; return; }
+    }
+    if (sop) {
+      const [a, b] = opSeg(app.state.room, sop);
+      if (near(a, 18)) { drag = { mode: 'resizeOp', o: sop, end: 0 }; return; }
+      if (near(b, 18)) { drag = { mode: 'resizeOp', o: sop, end: 1 }; return; }
     }
     const f = hitFurniture(x, y);
     if (f) {
       app.select(f.id);
       drag = { mode: 'move', f, dx: x - f.x, dy: y - f.y, moved: false };
-    } else {
-      drag = { mode: 'pan', sx, sy, ox: view.ox, oy: view.oy, moved: false };
+      return;
     }
+    const o = hitOpening(x, y);
+    if (o) { app.selectOp(o.id); drag = { mode: 'moveOp', o, sx, sy, moved: false }; return; }
+    const fx = hitFixture(x, y);
+    if (fx) { app.selectFx(fx.id); drag = { mode: 'moveFx', fx, dx: x - fx.x, dy: y - fx.y, sx, sy, moved: false }; return; }
+    drag = { mode: 'pan', sx, sy, ox: view.ox, oy: view.oy, moved: false };
   });
+
+  // 作り付け(左上の角と幅・奥行)の4つの角
+  const fxCorners = fx => [[fx.x, fx.y], [fx.x + fx.w, fx.y], [fx.x + fx.w, fx.y + fx.d], [fx.x, fx.y + fx.d]];
+  function hitFixture(x, y) {
+    const list = app.state.room.fixtures;
+    for (let i = list.length - 1; i >= 0; i--) {
+      const f = list[i];
+      if (x >= f.x && x <= f.x + f.w && y >= f.y && y <= f.y + f.d) return f;
+    }
+    return null;
+  }
+  // 窓・ドアは壁の線の近く(指で押しやすいように少し広め)
+  function hitOpening(x, y) {
+    const room = app.state.room, tol = 16 / view.s;
+    for (const o of room.openings) {
+      const [[x1, y1], [x2, y2]] = opSeg(room, o);
+      if (x >= Math.min(x1, x2) - tol && x <= Math.max(x1, x2) + tol && y >= Math.min(y1, y2) - tol && y <= Math.max(y1, y2) + tol) return o;
+    }
+    return null;
+  }
+  // 指の位置から、いちばん近い壁と、壁に沿った位置
+  function nearestWall(x, y) {
+    const room = app.state.room;
+    const c = [['entrance', Math.abs(y), x, room.w], ['balcony', Math.abs(room.d - y), x, room.w], ['left', Math.abs(x), y, room.d], ['right', Math.abs(room.w - x), y, room.d]];
+    c.sort((a, b) => a[1] - b[1]);
+    return { wall: c[0][0], along: c[0][2], len: c[0][3] };
+  }
 
   canvas.addEventListener('pointermove', e => {
     if (!pointers.has(e.pointerId)) return;
@@ -113,6 +156,54 @@ export function create2D(canvas, app) {
       render(); return;
     }
     const [x, y] = toCm(sx, sy);
+    const room = app.state.room;
+    if (drag.mode === 'resizeF') {
+      // 反対側の角を動かさずに、指の位置まで大きさを変える(家具の向きに合わせて計算)
+      const f = drag.f, t = f.rot * Math.PI / 180, c = Math.cos(t), s2 = Math.sin(t);
+      const dx = x - drag.anchor[0], dy = y - drag.anchor[1];
+      const lx = dx * c + dy * s2, ly = -dx * s2 + dy * c;
+      f.w = Math.max(5, Math.round(Math.abs(lx) / SNAP) * SNAP);
+      f.d = Math.max(f.type === 'art' || f.type === 'curtain' ? 1 : 5, Math.round(Math.abs(ly) / SNAP) * SNAP);
+      const hx = Math.sign(lx || 1) * f.w / 2, hy = Math.sign(ly || 1) * f.d / 2;
+      f.x = Math.round((drag.anchor[0] + hx * c - hy * s2) * 10) / 10;
+      f.y = Math.round((drag.anchor[1] + hx * s2 + hy * c) * 10) / 10;
+      app.changed({ light: true }); return;
+    }
+    if (drag.mode === 'resizeFx') {
+      const fx = drag.fx, [ax, ay] = drag.anchor;
+      let px = snapCm(x), py = snapCm(y);
+      px = Math.max(0, Math.min(room.w, px)); py = Math.max(0, Math.min(room.d, py));
+      fx.w = Math.max(5, Math.abs(px - ax)); fx.d = Math.max(5, Math.abs(py - ay));
+      fx.x = px < ax ? ax - fx.w : ax; fx.y = py < ay ? ay - fx.d : ay;
+      app.changed({ light: true }); return;
+    }
+    if (drag.mode === 'moveFx') {
+      if (!drag.moved && Math.hypot(sx - drag.sx, sy - drag.sy) < 6) return; // タップだけのときは動かさない
+      drag.moved = true;
+      const fx = drag.fx;
+      fx.x = snapCm(x - drag.dx); fx.y = snapCm(y - drag.dy);
+      // 壁の近くでは壁にぴったり
+      if (Math.abs(fx.x) < 8) fx.x = 0; else if (Math.abs(room.w - fx.x - fx.w) < 8) fx.x = room.w - fx.w;
+      if (Math.abs(fx.y) < 8) fx.y = 0; else if (Math.abs(room.d - fx.y - fx.d) < 8) fx.y = room.d - fx.d;
+      app.changed({ light: true }); return;
+    }
+    if (drag.mode === 'moveOp') {
+      if (!drag.moved && Math.hypot(sx - drag.sx, sy - drag.sy) < 6) return;
+      drag.moved = true;
+      const o = drag.o, w = nearestWall(x, y);
+      o.wall = w.wall;
+      o.start = Math.max(0, Math.min(w.len - o.width, snapCm(w.along - o.width / 2)));
+      app.changed({ light: true }); return;
+    }
+    if (drag.mode === 'resizeOp') {
+      const o = drag.o, horiz = o.wall === 'entrance' || o.wall === 'balcony';
+      const len = horiz ? room.w : room.d;
+      const along = Math.max(0, Math.min(len, snapCm(horiz ? x : y)));
+      const endPos = o.start + o.width;
+      if (drag.end === 0) { const ns = Math.min(along, endPos - 10); o.width = endPos - ns; o.start = ns; }
+      else o.width = Math.max(10, along - o.start);
+      app.changed({ light: true }); return;
+    }
     if (drag.mode === 'tool' && tool && tool.a) {
       tool.b = [snapCm(x), snapCm(y)];
       render();
@@ -154,6 +245,7 @@ export function create2D(canvas, app) {
     if (!drag) return;
     if (drag.mode === 'pan' && !drag.moved) app.select(null);
     if ((drag.mode === 'move' && drag.moved) || drag.mode === 'rotate') app.changed();
+    if (['resizeF', 'resizeFx', 'resizeOp'].includes(drag.mode) || (['moveFx', 'moveOp'].includes(drag.mode) && drag.moved)) app.changed();
     if (drag.mode === 'img') app.changed();
     if (drag.mode === 'tool' && tool && tool.a && tool.b) {
       const [ax, ay] = tool.a, [bx, by] = tool.b;
@@ -178,7 +270,7 @@ export function create2D(canvas, app) {
   function render() {
     if (!W) return;
     const res = paint(ctx, W, H, dpr, view, {
-      room: app.state.room, furniture: app.furniture(), sel: app.selected(), vstate: app.state.view,
+      room: app.state.room, furniture: app.furniture(), sel: app.selected(), selFx: app.selectedFx(), selOp: app.selectedOp(), vstate: app.state.view,
       underlay: app.state.underlay, underlayImg: app.underlayImg, tool, handlePos,
     });
     app.reportStatus(res.bad.size, res.narrow.length);
@@ -188,8 +280,16 @@ export function create2D(canvas, app) {
   return {
     render, resize, fit, canvas, snapToWalls,
     setTool(t) { tool = t; render(); },
+    _view: view, // 動作確認用
     get tool() { return tool; },
   };
+}
+
+// 窓・ドアの両はし(cm)
+function opSeg(room, o) {
+  return o.wall === 'entrance' ? [[o.start, 0], [o.start + o.width, 0]]
+    : o.wall === 'balcony' ? [[o.start, room.d], [o.start + o.width, room.d]]
+      : o.wall === 'left' ? [[0, o.start], [0, o.start + o.width]] : [[room.w, o.start], [room.w, o.start + o.width]];
 }
 
 // 部屋全体が収まるように拡大率と位置を決める
@@ -319,9 +419,7 @@ function paint(ctx, W, H, dpr, view, data) {
   ctx.strokeRect(rx, ry, room.w * s, room.d * s);
   // 窓・ドア
   for (const o of room.openings) {
-    const seg = o.wall === 'entrance' ? [[o.start, 0], [o.start + o.width, 0]]
-      : o.wall === 'balcony' ? [[o.start, room.d], [o.start + o.width, room.d]]
-        : o.wall === 'left' ? [[0, o.start], [0, o.start + o.width]] : [[room.w, o.start], [room.w, o.start + o.width]];
+    const seg = opSeg(room, o);
     const [a, b] = toPx(...seg[0]), [c, d] = toPx(...seg[1]);
     ctx.lineWidth = thumb ? 4 : 6; ctx.strokeStyle = '#fff'; line(a, b, c, d);
     if (o.kind === 'window') {
@@ -398,6 +496,32 @@ function paint(ctx, W, H, dpr, view, data) {
     ctx.fillStyle = '#e05297'; ctx.beginPath(); ctx.arc(hx, hy, 11, 0, Math.PI * 2); ctx.fill();
     label('⟳', hx, hy + 1, { size: 14, color: '#fff', bold: true });
     label(`${sel.rot}°`, hx + 16, hy, { size: 11, color: '#e05297', align: 'left', bold: true, bg: 'rgba(255,255,255,.85)' });
+  }
+
+  // 大きさを変える「つまみ」(白い四角)
+  const grip = ([x, y]) => {
+    const [px, py] = toPx(x, y);
+    ctx.fillStyle = '#fff'; ctx.strokeStyle = '#e05297'; ctx.lineWidth = 2;
+    ctx.fillRect(px - 7, py - 7, 14, 14); ctx.strokeRect(px - 7, py - 7, 14, 14);
+  };
+  if (sel && data.handlePos) corners(sel).forEach(grip);
+  // 選んでいる作り付け
+  const sfx = data.selFx;
+  if (sfx) {
+    const [x0, y0] = toPx(sfx.x, sfx.y);
+    ctx.fillStyle = 'rgba(224,82,151,.15)'; ctx.fillRect(x0, y0, sfx.w * s, sfx.d * s);
+    ctx.strokeStyle = '#e05297'; ctx.lineWidth = 3; ctx.strokeRect(x0, y0, sfx.w * s, sfx.d * s);
+    label(`${sfx.w}×${sfx.d}cm`, x0 + sfx.w * s / 2, y0 + sfx.d * s / 2 + 14, { size: 11, color: '#fff', bg: '#e05297', bold: true });
+    [[sfx.x, sfx.y], [sfx.x + sfx.w, sfx.y], [sfx.x + sfx.w, sfx.y + sfx.d], [sfx.x, sfx.y + sfx.d]].forEach(grip);
+  }
+  // 選んでいる窓・ドア
+  const sop = data.selOp;
+  if (sop) {
+    const [p1, p2] = opSeg(room, sop);
+    const [a, b] = toPx(...p1), [c, d] = toPx(...p2);
+    ctx.strokeStyle = 'rgba(224,82,151,.85)'; ctx.lineWidth = 10; ctx.lineCap = 'round'; line(a, b, c, d); ctx.lineCap = 'butt';
+    label(`${sop.name} ${sop.width}cm`, (a + c) / 2, (b + d) / 2 + (sop.wall === 'balcony' ? -18 : 18), { size: 11, color: '#fff', bg: '#e05297', bold: true });
+    grip(p1); grip(p2);
   }
 
   // なぞり道具の表示

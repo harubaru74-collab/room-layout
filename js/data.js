@@ -140,6 +140,8 @@ export function normalizeState(s) {
   const room = { ...defaultRoom(), ...s.room };
   if (!Array.isArray(room.fixtures)) room.fixtures = [];
   if (!Array.isArray(room.openings)) room.openings = [];
+  // 古いデータで id がないものに id をつける(図でタップして選ぶのに使う)
+  for (const o of [...room.fixtures, ...room.openings]) if (!o.id) o.id = newId(o.wall ? 'op' : 'fx');
   const plans = {};
   for (const [k, p] of Object.entries(s.plans)) {
     if (!p || !Array.isArray(p.furniture)) continue;
