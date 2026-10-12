@@ -1,5 +1,5 @@
 // 当たり判定・距離計算などの図形まわりの計算
-import { FLAT_TYPES } from './data.js';
+import { FLAT_TYPES, WALL_TYPES } from './data.js';
 
 // 家具の4つの角(時計回り)。f は {x,y,w,d,rot}
 export function corners(f) {
@@ -70,12 +70,14 @@ export function bbox(poly) {
 
 // 床に敷くだけのもの(ラグ)は当たり判定や通路チェックから外す
 export const isFlat = f => FLAT_TYPES.includes(f.type);
+// 壁掛けのもの(床の上の当たり判定・通路チェックから外す)
+export const isWallHung = f => WALL_TYPES.includes(f.type);
 
 // 赤く表示する家具の id 一覧と、狭い通路の一覧を計算
 export function analyze(room, furniture) {
   const bad = new Set();
   const narrow = [];
-  const items = furniture.filter(f => !isFlat(f)).map(f => ({ f, poly: corners(f) }));
+  const items = furniture.filter(f => !isFlat(f) && !isWallHung(f)).map(f => ({ f, poly: corners(f) }));
   const fixtures = room.fixtures.map(r => ({ r, poly: rectPoly(r) }));
   for (const it of items) {
     const b = bbox(it.poly);

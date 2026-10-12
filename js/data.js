@@ -3,7 +3,8 @@
 // 家具の x,y は「家具の中心」の位置。rot は時計回りの角度(度)。
 // 家具の「正面」は rot=0 のときベランダ側(+y)を向く。
 
-export const STORAGE_KEY = 'roomLayout.v1';
+export const STORAGE_KEY = 'roomLayout.v1';      // 部屋が1つだけだったころの保存場所(読み込みだけ)
+export const STORE_KEY = 'roomLayout.v2';        // いくつもの部屋をまとめて保存する場所
 
 // 写真からの推測で置いた間取り。画面の「部屋の設定」から全部変更できる
 export function defaultRoom() {
@@ -52,12 +53,16 @@ export const CATALOG = [
   { type: 'lamp', name: 'フロアライト', w: 35, d: 35, h: 150, color: '#f3ead6' },
   { type: 'mirror', name: '姿見(スタンドミラー)', w: 45, d: 30, h: 160, color: '#c8a77d' },
   { type: 'bed', name: 'セミダブルベッド', w: 120, d: 195, h: 45, color: '#cdb89b' },
+  { type: 'art', name: 'アートフレーム(壁掛け)', w: 50, d: 3, h: 70, elev: 110, color: '#c8a77d' },
+  { type: 'curtain', name: 'カーテン(追加用)', w: 100, d: 10, h: 200, color: '#e9e1d3' },
 ];
 
 // 丸い形の家具(2Dでは楕円で描く。当たり判定は外側の四角で近似)
 export const ROUND_TYPES = ['roundtable', 'stool', 'roundrug', 'plant', 'lamp'];
 // 床に敷くだけのもの(当たり判定・通路チェックから外す)
 export const FLAT_TYPES = ['rug', 'roundrug'];
+// 壁に掛けるもの(床の通路チェックから外す)
+export const WALL_TYPES = ['art'];
 
 export const COLOR_CHIPS = ['#8d9095', '#4a4d52', '#f1ece3', '#ffffff', '#cdb89b', '#b38d5f', '#6e5440',
   '#d9c4a6', '#f2c4ce', '#e8a0b4', '#a7c4bc', '#8fb3d9', '#c9b6e4', '#e9d27a'];
@@ -70,20 +75,58 @@ export const WALL_COLORS = [
   { name: 'くすみブルー', color: '#d5dfe6' },
 ];
 
+// kind: wood=フローリング / herring=ヘリンボーン / marble=大理石 / stone=石 / terrazzo=テラゾー / tile=タイル / mortar=モルタル
+// tile: 目地(タイルのすき間)の間隔 cm
 export const FLOORS = [
-  { name: 'オーク', base: '#b88a5a', line: '#8f6538' },
-  { name: 'ナチュラル', base: '#d4b48a', line: '#ad8b5e' },
-  { name: 'ウォルナット', base: '#6f4c33', line: '#4d3221' },
-  { name: 'ホワイトアッシュ', base: '#e2d6c4', line: '#c2b39c' },
-  { name: 'グレー', base: '#a9a49d', line: '#8a857e' },
+  { name: 'オーク', kind: 'wood', base: '#b88a5a', line: '#8f6538' },
+  { name: 'ナチュラル', kind: 'wood', base: '#d4b48a', line: '#ad8b5e' },
+  { name: 'ウォルナット', kind: 'wood', base: '#6f4c33', line: '#4d3221' },
+  { name: 'ホワイトアッシュ', kind: 'wood', base: '#e2d6c4', line: '#c2b39c' },
+  { name: 'グレー木目', kind: 'wood', base: '#a9a49d', line: '#8a857e' },
+  { name: 'ヘリンボーン', kind: 'herring', base: '#c49a6c', line: '#8f6538' },
+  { name: '大理石ホワイト', kind: 'marble', base: '#efede9', line: '#a9a7a3', tile: 60 },
+  { name: '大理石ベージュ', kind: 'marble', base: '#e6d8c3', line: '#b08f68', tile: 60 },
+  { name: '大理石ブラック', kind: 'marble', base: '#2b2b2d', line: '#c9c4bb', tile: 60 },
+  { name: 'ストーングレー', kind: 'stone', base: '#9d9d99', line: '#6f6f6b', tile: 60 },
+  { name: 'ストーンベージュ', kind: 'stone', base: '#cfc2ad', line: '#9b8c74', tile: 60 },
+  { name: 'テラゾー', kind: 'terrazzo', base: '#ebe6de', line: '#b5aa9a', tile: 60 },
+  { name: 'タイルホワイト', kind: 'tile', base: '#f2f1ee', line: '#c9c7c2', tile: 30 },
+  { name: 'モルタル', kind: 'mortar', base: '#b4b1ab', line: '#8e8b85' },
 ];
+
+// 壁の仕上げ
+export const WALL_FINISHES = [
+  { id: 'plain', name: '無地クロス' },
+  { id: 'plaster', name: '塗り壁' },
+  { id: 'brick', name: 'レンガ調' },
+  { id: 'panel', name: '木目パネル' },
+  { id: 'stone', name: 'ストーン調' },
+];
+
+// 家具の素材(3Dでの質感)
+export const FINISHES = [
+  { id: 'auto', name: 'おまかせ' },
+  { id: 'wood', name: '木目' },
+  { id: 'fabric', name: 'ファブリック(布)' },
+  { id: 'boucle', name: 'ブークレ(もこもこ)' },
+  { id: 'leather', name: 'レザー' },
+  { id: 'marble', name: '大理石・ストーン' },
+  { id: 'metal', name: 'スチール・金属' },
+  { id: 'plain', name: 'つるつる(無地)' },
+];
+// 素材がおまかせのときの決め方
+export function autoFinish(type) {
+  if (['sofa', 'sofa1', 'bed', 'futon', 'rug', 'roundrug', 'stool'].includes(type)) return 'fabric';
+  if (['tvstand', 'bookshelf', 'desk', 'lowtable', 'roundtable', 'dresser', 'mirror', 'chair'].includes(type)) return 'wood';
+  return 'plain';
+}
 
 // 床の色(自由入力)から木目の線の色を作る
 export function floorStyle(view) {
   if (view.floor >= 0 && FLOORS[view.floor]) return FLOORS[view.floor];
   const n = parseInt((view.floorColor || '#b88a5a').slice(1), 16);
   const dk = v => Math.round(v * 0.72).toString(16).padStart(2, '0');
-  return { name: '自由', base: view.floorColor, line: '#' + dk(n >> 16 & 255) + dk(n >> 8 & 255) + dk(n & 255) };
+  return { name: '自由', kind: 'wood', base: view.floorColor, line: '#' + dk(n >> 16 & 255) + dk(n >> 8 & 255) + dk(n & 255) };
 }
 export function wallStyle(view) {
   if (view.wall >= 0 && WALL_COLORS[view.wall]) return WALL_COLORS[view.wall].color;
@@ -108,6 +151,7 @@ export function normalizeState(s) {
         w: +f.w || 60, d: +f.d || 40, h: +f.h || 0, seat: +f.seat || 0,
         color: /^#[0-9a-f]{6}$/i.test(f.color) ? f.color : '#a7c4bc',
         x: +f.x || 0, y: +f.y || 0, rot: ((+f.rot || 0) % 360 + 360) % 360, url: String(f.url || ''),
+        finish: f.finish || 'auto', elev: +f.elev || 0, photo: typeof f.photo === 'string' && f.photo.startsWith('data:image/') ? f.photo : '',
       })),
     };
   }
@@ -124,7 +168,7 @@ export function makeFurniture(tpl, x, y, rot = 0) {
     id: 'f' + Math.random().toString(36).slice(2, 9),
     type: tpl.type, name: tpl.name,
     w: tpl.w, d: tpl.d, h: tpl.h, seat: tpl.seat || 0,
-    color: tpl.color, x, y, rot, url: '',
+    color: tpl.color, x, y, rot, url: tpl.url || '', finish: tpl.finish || 'auto', elev: tpl.elev || 0, photo: tpl.photo || '',
   };
 }
 
@@ -150,6 +194,98 @@ export function defaultState() {
       C: { name: '案C', furniture: JSON.parse(JSON.stringify(furn)) },
     },
     current: 'A',
-    view: { eye: 150, night: false, ceil: false, wall: 0, floor: 0, wallColor: '#f6f4ef', floorColor: '#b88a5a' },
+    view: { eye: 150, night: false, ceil: false, wall: 0, floor: 0, wallColor: '#f6f4ef', floorColor: '#b88a5a', wallFinish: 'plain', curtain: '#e9e1d3' },
+    underlay: null,
   };
+}
+
+// ---------- いくつもの部屋 ----------
+export const newId = p => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
+// 作り付けがほとんどない、シンプルな部屋
+export function blankRoom(w = 300, d = 600) {
+  return {
+    w, d, h: 240, balcony: 100,
+    fixtures: [{ id: newId('fx'), kind: 'entrance', name: '玄関', x: Math.max(0, w / 2 - 50), y: 0, w: 100, d: 90, h: 0 }],
+    openings: [
+      { id: newId('op'), kind: 'door', name: '玄関ドア', wall: 'entrance', start: Math.max(0, w / 2 - 40), width: 80, sill: 0, height: 200 },
+      { id: newId('op'), kind: 'window', name: '掃き出し窓', wall: 'balcony', start: Math.max(0, w / 2 - 85), width: 170, sill: 0, height: 200 },
+    ],
+  };
+}
+
+export function defaultStore() {
+  const id = newId('r');
+  return { version: 2, current: id, rooms: [{ id, name: '大井町 ワンルーム', state: defaultState() }] };
+}
+
+// 保存データ(古い形の1部屋だけのデータも)を、今の形にそろえる。おかしいときは null
+export function normalizeStore(s) {
+  if (!s || typeof s !== 'object') return null;
+  if (Array.isArray(s.rooms)) {
+    const rooms = s.rooms.map(r => r && { id: r.id || newId('r'), name: String(r.name || '部屋'), state: normalizeState(r.state) })
+      .filter(r => r && r.state);
+    if (!rooms.length) return null;
+    return { version: 2, savedAt: s.savedAt || 0, current: rooms.some(r => r.id === s.current) ? s.current : rooms[0].id, rooms };
+  }
+  const st = normalizeState(s);
+  if (!st) return null;
+  const id = newId('r');
+  return { version: 2, savedAt: s.savedAt || 0, current: id, rooms: [{ id, name: '大井町 ワンルーム', state: st }] };
+}
+
+// ---------- 商品ページの文字からサイズを読み取る ----------
+// 例: 「幅180×奥行41.8×高さ36.4cm」「W1200×D400×H450mm」「サイズ:約120×40×45cm」
+export function parseSize(text) {
+  if (!text) return null;
+  const t = String(text).replace(/[０-９．]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+    .replace(/[ｘＸ✕＊]/g, '×').replace(/[ \t\u3000]+/g, ' ');
+  // 値段の入った行(おすすめ商品の一覧など)と、梱包サイズの行は使わない
+  const lines = t.split(/\n/).filter(l => !/[¥￥]|円|梱包|段ボール|パッケージ|外箱|荷姿/.test(l));
+  const num = '(\\d+(?:\\.\\d+)?)';
+  const unitOf = s => /mm|ミリ/.test(s) ? 0.1 : /\d\s*m(?![m²])|メートル/.test(s) && !/cm|センチ/.test(s) ? 100 : 1;
+  const fix = (w, d, h, line) => {
+    const u = unitOf(line), r = v => v == null ? null : Math.round(v * u * 10) / 10;
+    const res = { w: r(w), d: r(d), h: r(h) };
+    return res.w > 0 && res.d > 0 && res.w < 1000 && res.d < 1000 ? res : null;
+  };
+  // 「幅〇 奥行〇 高さ〇」と書いてある形
+  const labeled = line => {
+    const pick = re => { const m = line.match(re); return m ? parseFloat(m[1]) : null; };
+    const w = pick(new RegExp('(?:幅|横幅|W)\\s*[:：]?\\s*約?\\s*' + num));
+    const d = pick(new RegExp('(?:奥行き?|奥|D)\\s*[:：]?\\s*約?\\s*' + num));
+    const h = pick(new RegExp('(?:高さ|H)\\s*[:：]?\\s*約?\\s*' + num));
+    return w != null && d != null ? fix(w, d, h, line) : null;
+  };
+  // 「120×40×45cm」の形(幅×奥行×高さ の順とみなす)
+  const plain = line => {
+    const m3 = line.match(new RegExp(num + '\\s*(?:cm|mm)?\\s*×\\s*' + num + '\\s*(?:cm|mm)?\\s*×\\s*' + num + '\\s*(cm|mm|m)'));
+    if (m3) return fix(+m3[1], +m3[2], +m3[3], line);
+    const m2 = line.match(new RegExp(num + '\\s*(?:cm|mm)?\\s*×\\s*' + num + '\\s*(cm|mm)'));
+    return m2 ? fix(+m2[1], +m2[2], null, line) : null;
+  };
+  const sizeLines = lines.filter(l => /サイズ|寸法|外寸|外形/.test(l));
+  for (const [list, fn] of [[sizeLines, labeled], [lines, labeled], [sizeLines, plain], [lines, plain]]) {
+    for (const l of list) { const r = fn(l); if (r) return r; }
+  }
+  return null;
+}
+
+// 商品名から家具の種類と素材をだいたい当てる
+export function guessType(name) {
+  const n = String(name || '');
+  const rules = [
+    [/1人掛け|一人掛け|パーソナルチェア|ラウンジチェア/, 'sofa1'], [/ソファ|カウチ/, 'sofa'],
+    [/テレビ台|テレビボード|ローボード|TVボード/i, 'tvstand'], [/ベッド|すのこ/, 'bed'], [/マットレス|布団|ふとん/, 'futon'],
+    [/丸型ラグ|円形ラグ|ラウンドラグ/, 'roundrug'], [/ラグ|カーペット|マット/, 'rug'], [/ドレッサー/, 'dresser'],
+    [/冷蔵庫/, 'fridge'], [/洗濯機/, 'washer'], [/本棚|シェルフ|ラック|棚/, 'bookshelf'], [/デスク|机/, 'desk'],
+    [/丸テーブル|ラウンドテーブル|円形テーブル|サイドテーブル/, 'roundtable'], [/テーブル/, 'lowtable'],
+    [/スツール|オットマン/, 'stool'], [/チェア|椅子|イス/, 'chair'], [/フロアライト|フロアランプ|スタンドライト|照明/, 'lamp'],
+    [/ミラー|鏡/, 'mirror'], [/観葉植物|フェイクグリーン|植物/, 'plant'], [/アート|ポスター|フレーム|絵/, 'art'], [/カーテン/, 'curtain'],
+  ];
+  const type = (rules.find(([re]) => re.test(n)) || [, 'box'])[1];
+  const finish = /大理石|ストーン|モルタル|マーブル|石目/.test(n) ? 'marble' : /ブークレ|ボア|シープ/.test(n) ? 'boucle'
+    : /レザー|革/.test(n) ? 'leather' : /スチール|アイアン|金属|メタル/.test(n) && !/木/.test(n) ? 'metal'
+      : /木目|木製|天然木|オーク|ウォルナット|パイン/.test(n) ? 'wood' : /ファブリック|布|コーデュロイ|リネン/.test(n) ? 'fabric' : 'auto';
+  return { type, finish };
 }
